@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import asdict
+from html import escape
 from pathlib import Path
 
 import streamlit as st
@@ -218,6 +220,41 @@ def init_state() -> None:
         st.session_state.last_result = None
     if "active_view" not in st.session_state:
         st.session_state.active_view = "Control Room"
+    if "diagnostic_pinned" not in st.session_state:
+        st.session_state.diagnostic_pinned = False
+
+
+def workspace_has_content() -> bool:
+    return any(
+        [
+            bool(st.session_state.get("ehr_paste_text", "").strip()),
+            bool(st.session_state.get("case_chief_complaint", "").strip()),
+            bool(st.session_state.get("case_summary", "").strip()),
+            st.session_state.get("last_result") is not None,
+        ]
+    )
+
+
+def should_use_compact_chrome(active_view: str) -> bool:
+    profile = st.session_state.get("profile")
+    if not profile or not profile.first_run_complete:
+        return False
+    if active_view != "Control Room":
+        return True
+    return workspace_has_content()
+
+
+def read_clipboard_text() -> str:
+    try:
+        result = subprocess.run(
+            ["pbpaste"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
 
 
 def render_sidebar() -> None:
@@ -225,9 +262,9 @@ def render_sidebar() -> None:
         st.markdown(
             """
             <div class="sidebar-brand">
-                <div class="brand-kicker">HKU-SZH</div>
-                <div class="brand-title">multiagent for rare</div>
-                <div class="brand-subtitle">SZ Clin Center for Rare Dis</div>
+                <div class="brand-kicker">HKU-SZH · SZ Clin Center for Rare Dis</div>
+                <div class="brand-title">港大医院 罕见病多智能体诊疗系统</div>
+                <div class="brand-subtitle">multiagent for rare</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -251,6 +288,14 @@ def render_sidebar() -> None:
             """,
             unsafe_allow_html=True,
         )
+        st.markdown(
+            """
+            <div class="sidebar-footer">
+                conceived by PK Chen and executed by Pk Chen and Marco Xu.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_header() -> None:
@@ -258,17 +303,16 @@ def render_header() -> None:
         """
         <section class="hero-shell hero-compact">
             <div class="hero-left">
-                <div class="hero-kicker">罕见病智能协作中枢</div>
-                <h1>临床智能控制台</h1>
+                <div class="hero-kicker">Rare Disease Clinical Workspace</div>
+                <h1>病例输入与多智能体会诊</h1>
                 <p>
-                    多模态接诊录入、智能体快速收敛、诊疗支持与临床级输出，
-                    在一个连续工作流中完成。
+                    将电子病历粘贴进主输入框，系统自动完成结构化抽取、会诊协同与临床级输出。
                 </p>
             </div>
             <div class="hero-right">
-                <div class="hero-badge">对称 / 非对称编排</div>
-                <div class="hero-chip">中国指南 + 国际共识依据</div>
-                <div class="hero-chip">透明收敛过程诊断窗</div>
+                <div class="hero-badge">临床模式</div>
+                <div class="hero-chip">中国指南与国际共识</div>
+                <div class="hero-chip">可追溯协同过程</div>
             </div>
         </section>
         """,
@@ -283,14 +327,26 @@ def render_page_banner(active_view: str) -> None:
             <div class="page-banner-main">
                 <div class="page-banner-kicker">HKU-SZH · SZ Clin Center for Rare Dis</div>
                 <h1>港大医院 罕见病多智能体 诊疗系统</h1>
-                <p>面向临床多学科协作的多模态罕见病智能诊疗演示平台</p>
+                <p>面向临床多学科协作的罕见病智能诊疗工作台</p>
             </div>
             <div class="page-banner-side">
                 <div class="page-banner-view">{ui_label(active_view, WORKSPACE_VIEW_LABELS)}</div>
                 <div class="page-banner-chip">multiagent for rare</div>
-                <div class="page-banner-chip">顺滑对话式工作流</div>
+                <div class="page-banner-chip">clinical workspace</div>
             </div>
         </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_corner_heading(active_view: str) -> None:
+    st.markdown(
+        f"""
+        <div class="compact-corner-heading">
+            <div class="compact-corner-title">港大医院 罕见病多智能体 诊疗系统</div>
+            <div class="compact-corner-view">{ui_label(active_view, WORKSPACE_VIEW_LABELS)}</div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -595,22 +651,26 @@ def reset_case_prefill(settings: SystemSettings) -> None:
 
 
 def render_ehr_autofill_panel(settings: SystemSettings) -> None:
-    st.markdown("### 病历智能粘贴")
     with st.container(border=True):
-        st.caption(
-            "请将电子病历段落、入院记录、出院小结或转诊说明直接粘贴到这里。"
-            "系统会自动抽取关键信息并填入下方结构化接诊表单。"
-        )
         st.text_area(
             "粘贴病历原文",
             key="ehr_paste_text",
-            height=180,
-            placeholder="在此粘贴长段病历文本，然后点击“自动填充接诊字段”。",
+            height=240,
+            placeholder="像 Codex / Claude 一样，把病历整段贴进来。你也可以直接点击下方“从剪贴板粘贴”，无需手动 Ctrl+V。",
         )
-        action_left, action_right = st.columns([1.2, 1])
+        action_left, action_mid, action_right = st.columns([1, 1, 1])
         autofilled = False
         cleared = False
-        if action_left.button("自动填充接诊字段", use_container_width=True):
+        pasted = False
+        if action_left.button("从剪贴板粘贴", use_container_width=True):
+            clipboard_text = read_clipboard_text()
+            if clipboard_text:
+                st.session_state["ehr_paste_text"] = clipboard_text
+                pasted = True
+            else:
+                st.warning("没有读取到可用剪贴板文本。请确认系统剪贴板中已有病历内容。")
+
+        if action_mid.button("自动填充接诊字段", use_container_width=True):
             pasted_text = st.session_state.get("ehr_paste_text", "").strip()
             if pasted_text:
                 prefill = parse_ehr_intake(pasted_text, settings.default_department)
@@ -623,6 +683,8 @@ def render_ehr_autofill_panel(settings: SystemSettings) -> None:
             reset_case_prefill(settings)
             cleared = True
 
+        if pasted:
+            st.success("系统已从剪贴板读取文本并写入病历输入框。")
         if autofilled:
             st.success(
                 "系统已根据粘贴病历自动填入结构化接诊字段。"
@@ -633,7 +695,6 @@ def render_ehr_autofill_panel(settings: SystemSettings) -> None:
 
 
 def render_settings_view() -> None:
-    st.subheader("系统设置")
     settings = st.session_state.settings
     sync_settings_widget_defaults(settings)
     ensure_choice_state("settings_topology", TOPOLOGIES, settings.orchestration_mode)
@@ -726,27 +787,31 @@ def collect_submission() -> CaseSubmission:
     settings = st.session_state.settings
     with st.container(border=True):
         with st.form("case_form"):
-            c1, c2, c3 = st.columns([1.1, 1, 1])
-            department = c1.selectbox(
+            top_left, top_right = st.columns([1, 1.4])
+            department = top_left.selectbox(
                 "科室",
                 DEPARTMENTS,
                 key="case_department",
                 format_func=lambda x: ui_label(x, DEPARTMENT_LABELS_MAP),
             )
-            output_style = c2.selectbox(
+            chief_complaint = top_right.text_input("主诉", key="case_chief_complaint")
+
+            mode_col, urgency_col = st.columns([1.25, 1])
+            output_style = mode_col.radio(
                 "输出模式",
                 OUTPUT_STYLES,
                 key="case_output_style",
                 format_func=lambda x: ui_label(x, OUTPUT_STYLE_LABELS_MAP),
+                horizontal=True,
             )
-            urgency = c3.selectbox(
+            urgency = urgency_col.radio(
                 "紧急程度",
                 URGENCY_OPTIONS,
                 key="case_urgency",
                 format_func=lambda x: ui_label(x, URGENCY_LABELS_MAP),
+                horizontal=True,
             )
 
-            chief_complaint = st.text_input("主诉", key="case_chief_complaint")
             case_summary = st.text_area(
                 "临床摘要",
                 key="case_summary",
@@ -754,14 +819,21 @@ def collect_submission() -> CaseSubmission:
                 height=160,
             )
 
-            p1, p2, p3 = st.columns(3)
+            p1, p2 = st.columns([0.8, 1.2])
             age = p1.text_input("年龄", key="case_patient_age")
-            sex = p2.selectbox("性别", SEX_OPTIONS, key="case_patient_sex", format_func=lambda x: ui_label(x, SEX_LABELS_MAP))
-            insurance = p3.selectbox(
+            sex = p2.radio(
+                "性别",
+                SEX_OPTIONS,
+                key="case_patient_sex",
+                format_func=lambda x: ui_label(x, SEX_LABELS_MAP),
+                horizontal=True,
+            )
+            insurance = st.radio(
                 "医保类型",
                 INSURANCE_OPTIONS,
                 key="case_insurance_type",
                 format_func=lambda x: ui_label(x, INSURANCE_LABELS_MAP),
+                horizontal=True,
             )
 
             multimodal_images = st.file_uploader(
@@ -775,7 +847,7 @@ def collect_submission() -> CaseSubmission:
                 accept_multiple_files=True,
             )
 
-            show_process = st.toggle("显示收敛过程诊断窗", key="case_show_process")
+            show_process = st.toggle("启用右侧收敛诊断抽屉", key="case_show_process")
             submitted = st.form_submit_button("启动多智能体会诊", use_container_width=True)
 
     if not submitted:
@@ -798,14 +870,16 @@ def collect_submission() -> CaseSubmission:
     )
 
 
-def render_case_input() -> None:
-    st.subheader("病例接诊")
+def render_case_input(show_title: bool = True) -> None:
+    if show_title:
+        st.subheader("病例接诊")
     settings = st.session_state.settings
     sync_case_widget_defaults(settings)
     render_ehr_autofill_panel(settings)
     submission = collect_submission()
     if not submission.is_ready:
-        st.info("请先录入病例信息，再启动多智能体会诊。")
+        if show_title:
+            st.info("请先录入病例信息，再启动多智能体会诊。")
         return
 
     result = run_multiagent_case(
@@ -819,7 +893,7 @@ def render_case_input() -> None:
     save_history(st.session_state.history)
 
 
-def render_output_panel() -> None:
+def render_output_panel(show_title: bool = True) -> None:
     result = st.session_state.last_result
     if not result:
         st.markdown(
@@ -833,7 +907,16 @@ def render_output_panel() -> None:
         )
         return
 
-    st.subheader("临床建议")
+    if show_title:
+        st.subheader("临床建议")
+    action_col_left, action_col_right = st.columns([1, 0.42])
+    with action_col_right:
+        if result.show_process:
+            toggle_label = "取消固定右侧诊断栏" if st.session_state.diagnostic_pinned else "固定右侧诊断栏"
+            if st.button(toggle_label, use_container_width=True):
+                st.session_state.diagnostic_pinned = not st.session_state.diagnostic_pinned
+                st.rerun()
+
     st.markdown(
         f"""
         <div class="result-hero">
@@ -852,15 +935,18 @@ def render_output_panel() -> None:
         unsafe_allow_html=True,
     )
 
-    c1, c2 = st.columns([1.2, 1])
-    with c1:
-        st.markdown("### 专业结论")
+    tab_summary, tab_code, tab_reference = st.tabs(["结论", "编码与费用", "依据与安全"])
+    with tab_summary:
         st.markdown(result.professional_answer)
-        st.markdown("### 编码摘要")
-        st.table(result.coding_table)
-        st.markdown("### 方案与费用")
-        st.table(result.cost_table)
-    with c2:
+    with tab_code:
+        code_col, cost_col = st.columns([1, 1])
+        with code_col:
+            st.markdown("### 编码摘要")
+            st.table(result.coding_table)
+        with cost_col:
+            st.markdown("### 费用评估")
+            st.table(result.cost_table)
+    with tab_reference:
         st.markdown("### 下一步建议")
         for step in result.next_steps:
             st.markdown(f"- {step}")
@@ -870,36 +956,65 @@ def render_output_panel() -> None:
         st.markdown("### 安全提示")
         st.warning(result.safety_note)
 
-    if result.show_process:
-        st.markdown("### 收敛过程诊断")
-        for round_item in result.rounds:
-            st.markdown(
-                f"""
-                <div class="diag-card">
-                    <div class="diag-header">
-                        <strong>第 {round_item['round']} 轮</strong>
-                        <span>对齐度 {round_item['alignment']:.0%}</span>
-                    </div>
-                    <div>{round_item['summary']}</div>
+
+def render_diagnostic_drawer() -> None:
+    result = st.session_state.last_result
+    if not result or not result.show_process:
+        return
+
+    rounds_html = "".join(
+        [
+            f"""
+            <div class="drawer-section-card">
+                <div class="drawer-section-head">
+                    <strong>第 {item['round']} 轮</strong>
+                    <span>对齐度 {item['alignment']:.0%}</span>
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        st.markdown("### 智能体轨迹")
-        for agent_note in result.agent_trace:
-            st.markdown(
-                f"""
-                <div class="trace-card">
-                    <div><strong>{ui_label(agent_note['role'], ROLE_TEMPLATE_LABELS_MAP)}</strong> · {ui_label(agent_note['provider'], PROVIDER_LABELS_MAP)}</div>
-                    <div>{agent_note['note']}</div>
+                <div>{escape(str(item['summary']))}</div>
+            </div>
+            """
+            for item in result.rounds
+        ]
+    )
+    trace_html = "".join(
+        [
+            f"""
+            <div class="drawer-section-card">
+                <div class="drawer-section-head">
+                    <strong>{escape(ui_label(note['role'], ROLE_TEMPLATE_LABELS_MAP))}</strong>
+                    <span>{escape(ui_label(note['provider'], PROVIDER_LABELS_MAP))}</span>
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                <div>{escape(str(note['note']))}</div>
+            </div>
+            """
+            for note in result.agent_trace
+        ]
+    )
+    pinned_class = " pinned" if st.session_state.diagnostic_pinned else ""
+    st.markdown(
+        f"""
+        <div class="diagnostic-hover-rail"></div>
+        <aside class="diagnostic-drawer{pinned_class}">
+            <div class="diagnostic-drawer-header">
+                <div>
+                    <div class="diagnostic-drawer-kicker">收敛诊断</div>
+                    <div class="diagnostic-drawer-title">右侧智能体诊断抽屉</div>
+                </div>
+                <div class="diagnostic-drawer-score">{result.consensus_score:.0%}</div>
+            </div>
+            <div class="diagnostic-drawer-body">
+                <div class="drawer-block-title">收敛轮次</div>
+                {rounds_html}
+                <div class="drawer-block-title">智能体轨迹</div>
+                {trace_html}
+            </div>
+        </aside>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_history_view() -> None:
-    st.subheader("历史查询")
     history = st.session_state.history
     if not history:
         st.info("暂时还没有历史查询记录。")
@@ -916,13 +1031,20 @@ def render_history_view() -> None:
 
 
 def render_control_room() -> None:
-    render_header()
-    render_metric_strip(st.session_state.settings, st.session_state.history)
-    left, right = st.columns([1.1, 1])
-    with left:
-        render_case_input()
-    with right:
-        render_output_panel()
+    compact_mode = should_use_compact_chrome("Control Room")
+    if not compact_mode:
+        render_header()
+
+    input_height = 430 if compact_mode else 390
+    output_height = 360 if st.session_state.last_result else 180
+
+    with st.container(height=input_height, border=False):
+        render_case_input(show_title=not compact_mode)
+
+    with st.container(height=output_height, border=False):
+        render_output_panel(show_title=not compact_mode)
+
+    render_diagnostic_drawer()
 
 
 def bootstrap_first_run() -> None:
@@ -948,7 +1070,10 @@ def main() -> None:
     bootstrap_first_run()
 
     active_view = st.session_state.active_view
-    render_page_banner(active_view)
+    if should_use_compact_chrome(active_view):
+        render_corner_heading(active_view)
+    else:
+        render_page_banner(active_view)
     if active_view == "Control Room":
         render_control_room()
     elif active_view == "Settings":
