@@ -137,6 +137,46 @@ class QueryHistoryItem:
         )
 
 
+@dataclass
+class CaseSessionRecord:
+    session_id: str
+    timestamp: str
+    title: str
+    department: str
+    output_style: str
+    summary: str
+    consensus_score: float
+    submission: CaseSubmission | None = None
+    result: EngineResult | None = None
+
+    @classmethod
+    def from_result(cls, session_id: str, submission: CaseSubmission, result: EngineResult) -> "CaseSessionRecord":
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return cls(
+            session_id=session_id,
+            timestamp=timestamp,
+            title=result.title,
+            department=submission.department,
+            output_style=submission.output_style,
+            summary=result.executive_summary,
+            consensus_score=result.consensus_score,
+            submission=submission,
+            result=result,
+        )
+
+    @classmethod
+    def from_history_item(cls, session_id: str, item: QueryHistoryItem) -> "CaseSessionRecord":
+        return cls(
+            session_id=session_id,
+            timestamp=item.timestamp,
+            title=item.title,
+            department=item.department,
+            output_style=item.output_style,
+            summary=item.summary,
+            consensus_score=item.consensus_score,
+        )
+
+
 def default_profile() -> AppProfile:
     return AppProfile()
 

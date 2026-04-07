@@ -1,6 +1,6 @@
 # Multiagent for Rare
 
-Hospital-oriented Streamlit demo for a configurable rare disease multi-agent system.
+Hospital-oriented rare disease multi-agent workspace with a Python backend and a React frontend.
 
 ## Run
 
@@ -14,7 +14,7 @@ pip install -r requirements.txt
 3. Start the app on `127.0.0.1`:
 
 ```bash
-streamlit run app.py --server.address 127.0.0.1 --server.port 8501
+python -m uvicorn server:app --host 127.0.0.1 --port 8501 --reload
 ```
 
 4. Open:
@@ -31,16 +31,17 @@ Or, if you are using the local `.venv` created in this folder:
 
 ## What This Demo Includes
 
-- Premium landing and control-room style Streamlit UI
-- First-use profile setup and persistent user settings
-- Configurable agent roles, role specs, API providers, quick-paste API keys, and symmetric/asymmetric topologies
-- Multimodal intake for text, images, PDFs, and structured clinical fields
-- Convergence diagnostics showing how agents align toward a consistent recommendation
-- Diagnostic and treatment style outputs with demo coding blocks, surgical grade, cost estimates, and references
-- Local history of previous queries
+- React-based product UI with a professional workspace shell
+- Python API layer for profile, settings, intake parsing, history, and diagnosis flows
+- Persistent doctor profile and system settings
+- Configurable agent roles, provider definitions, and orchestration topology
+- Modern bottom composer with attachments, clipboard paste, advanced mode, and diagnostics drawer
+- Diagnostic and treatment style outputs with coding, cost estimates, references, and convergence rounds
+- Local session history stored on disk
 
 ## Notes
 
-- This is a demo workflow for prototyping and presentation.
+- The legacy Streamlit app remains in the repository, but the main local entrypoint now serves the React frontend from `server.py`.
+- This is still a demo workflow for prototyping and presentation.
 - It does not call real external medical APIs by default.
 - Clinical outputs are simulation-oriented and should be reviewed by qualified clinicians before any real-world use.
