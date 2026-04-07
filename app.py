@@ -254,9 +254,22 @@ def paste_clipboard_into_input() -> None:
     if text:
         existing = st.session_state.get("input_main", "").strip()
         st.session_state["input_main"] = f"{existing}\n\n{text}".strip() if existing else text
-        st.rerun()
     else:
-        st.warning("未读取到剪贴板内容")
+        st.session_state["clipboard_notice"] = "未读取到剪贴板内容"
+
+
+def clear_input_fields() -> None:
+    settings: SystemSettings = st.session_state.settings
+    st.session_state["input_main"] = ""
+    st.session_state["input_chief"] = ""
+    st.session_state["input_age"] = ""
+    st.session_state["input_dept"] = settings.default_department
+    st.session_state["input_style"] = OUTPUT_STYLES[0]
+    st.session_state["input_urgency"] = URGENCY_OPTIONS[0]
+    st.session_state["input_sex"] = SEX_OPTIONS[0]
+    st.session_state["input_insurance"] = INSURANCE_OPTIONS[0]
+    for key in ["input_images", "input_docs"]:
+        st.session_state.pop(key, None)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -270,6 +283,7 @@ def init_state() -> None:
         "active_view": "Control Room",
         "history_focus": None,
         "settings_workspace_section": SETTINGS_SECTIONS[0],
+        "clipboard_notice": "",
         # Conversation messages: list of dicts
         "messages": [],          # {"role": "user"|"assistant"|"system", "content": str, "meta": dict}
         "input_expanded": False,  # Whether input card is in expanded mode
@@ -320,6 +334,7 @@ def reset_workspace() -> None:
         "input_age": "",
         "input_chief": "",
         "input_expanded": False,
+        "clipboard_notice": "",
     }
     for key, value in defaults.items():
         st.session_state[key] = value
@@ -785,6 +800,10 @@ def render_input_area() -> None:
     """Primary composer surface for new case submission."""
     settings: SystemSettings = st.session_state.settings
     with st.container(border=True):
+        clipboard_notice = st.session_state.pop("clipboard_notice", "")
+        if clipboard_notice:
+            st.warning(clipboard_notice)
+
         head_col, toggle_col, reset_col = st.columns([0.64, 0.2, 0.16], vertical_alignment="center")
         with head_col:
             st.markdown(
@@ -799,16 +818,15 @@ def render_input_area() -> None:
                 unsafe_allow_html=True,
             )
         with reset_col:
-            if st.button(
+            st.button(
                 " ",
                 key="reset_workspace_icon",
                 icon=":material/restart_alt:",
                 help="清空重置",
                 width="stretch",
                 type="tertiary",
-            ):
-                reset_workspace()
-                st.rerun()
+                on_click=reset_workspace,
+            )
         with toggle_col:
             st.toggle(
                 "高级模式",
@@ -835,9 +853,8 @@ def _render_compact_input(settings: SystemSettings) -> None:
     st.session_state.setdefault("input_age", "")
     st.session_state.setdefault("input_chief", "")
 
-    st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
     st.text_area(
-        "病例摘要",
+        " ",
         key="input_main",
         height=96,
         placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
@@ -863,15 +880,15 @@ def _render_compact_input(settings: SystemSettings) -> None:
             label_visibility="collapsed",
         )
     with paste_col:
-        if st.button(
+        st.button(
             " ",
             key="paste_clipboard_compact",
             icon=":material/content_paste:",
             help="从剪贴板粘贴病历",
             width="stretch",
             type="tertiary",
-        ):
-            paste_clipboard_into_input()
+            on_click=paste_clipboard_into_input,
+        )
     with send_col:
         if st.button("启动会诊", key="send_btn", help="启动多智能体会诊", use_container_width=True, type="primary"):
             _handle_submit(settings)
@@ -893,9 +910,8 @@ def _render_expanded_input(settings: SystemSettings) -> None:
         st.session_state.setdefault(key, val)
 
     with st.container():
-        st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
         st.text_area(
-            "病例摘要",
+            " ",
             key="input_main",
             height=120,
             placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
@@ -974,26 +990,17 @@ def _render_expanded_input(settings: SystemSettings) -> None:
             if st.button("启动多智能体会诊", key="submit_expanded", use_container_width=True, type="primary"):
                 _handle_submit(settings)
         with paste_col:
-            if st.button(
+            st.button(
                 " ",
                 key="paste_clipboard",
                 icon=":material/content_paste:",
                 help="从剪贴板粘贴病历",
                 width="stretch",
                 type="tertiary",
-            ):
-                paste_clipboard_into_input()
+                on_click=paste_clipboard_into_input,
+            )
         with clear_col:
-            if st.button("清空输入", key="clear_input"):
-                for k in [
-                    "input_main", "input_chief", "input_age",
-                    "input_sex", "input_insurance",
-                ]:
-                    st.session_state[k] = "" if k != "input_sex" else SEX_OPTIONS[0]
-                st.session_state["input_dept"] = settings.default_department
-                st.session_state["input_style"] = OUTPUT_STYLES[0]
-                st.session_state["input_urgency"] = URGENCY_OPTIONS[0]
-                st.rerun()
+            st.button("清空输入", key="clear_input", on_click=clear_input_fields)
 
 
 def _handle_submit(settings: SystemSettings) -> None:
