@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import asdict
+from datetime import datetime
 from html import escape
 from pathlib import Path
 
@@ -25,67 +26,87 @@ from rare_agents.storage import load_json, save_json
 from rare_agents.style import inject_css
 
 
+# ── Paths ────────────────────────────────────────────────────────────────────
+
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 PROFILE_PATH = DATA_DIR / "profile.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 HISTORY_PATH = DATA_DIR / "history.json"
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
 WORKSPACE_VIEWS = ["Control Room", "Settings", "Profile", "History"]
+SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录"]
 DEPARTMENTS = [item.value for item in DepartmentOption]
 TOPOLOGIES = [mode.value for mode in OrchestrationMode]
 OUTPUT_STYLES = ["Diagnostic", "Surgical / Treatment Plan"]
 URGENCY_OPTIONS = ["Routine", "Priority", "Emergency"]
 SEX_OPTIONS = ["Unknown", "Female", "Male", "Other"]
-INSURANCE_OPTIONS = ["Resident insurance", "Employee insurance", "Self-pay / uninsured", "Commercial"]
-WORKSPACE_VIEW_LABELS = {
-    "Control Room": "智能控制台",
+INSURANCE_OPTIONS = [
+    "Resident insurance",
+    "Employee insurance",
+    "Self-pay / uninsured",
+    "Commercial",
+]
+
+# ── Label maps ────────────────────────────────────────────────────────────────
+
+VIEW_LABELS = {
+    "Control Room": "会诊工作台",
     "Settings": "系统设置",
-    "Profile": "用户档案",
+    "Profile": "医生档案",
     "History": "历史记录",
 }
-DEPARTMENT_LABELS_MAP = {
-    DepartmentOption.ORTHOPEDICS.value: "骨科 / 骨病",
-    DepartmentOption.NEUROLOGY.value: "神经内科 / 神经系统",
+VIEW_DESCRIPTIONS = {
+    "Control Room": "左侧查看既往记录，中间处理病例，右上角打开多智能体诊断与快速设置。",
+    "Settings": "管理模型接口、编排拓扑和多智能体角色配置。",
+    "Profile": "维护当前医生档案，便于系统贴合真实部署场景。",
+    "History": "查看既往会诊摘要与一致性结果，快速回看记录。",
+}
+DEPT_LABELS = {
+    DepartmentOption.ORTHOPEDICS.value: "骨科",
+    DepartmentOption.NEUROLOGY.value: "神经内科",
     DepartmentOption.PEDIATRICS.value: "儿科",
-    DepartmentOption.ICU.value: "重症医学科 ICU",
-    DepartmentOption.EMERGENCY.value: "急诊 / A&E",
-    DepartmentOption.PULMONARY.value: "呼吸科 / 肺部",
+    DepartmentOption.ICU.value: "重症 ICU",
+    DepartmentOption.EMERGENCY.value: "急诊",
+    DepartmentOption.PULMONARY.value: "呼吸科",
     DepartmentOption.GENETICS.value: "医学遗传",
     DepartmentOption.MULTIDISCIPLINARY.value: "多学科 MDT",
 }
-TOPOLOGY_LABELS_MAP = {
-    OrchestrationMode.SYMMETRIC.value: "对称模式",
-    OrchestrationMode.ASYMMETRIC.value: "非对称模式",
+TOPOLOGY_LABELS = {
+    OrchestrationMode.SYMMETRIC.value: "对称",
+    OrchestrationMode.ASYMMETRIC.value: "非对称",
 }
-OUTPUT_STYLE_LABELS_MAP = {
+OUTPUT_LABELS = {
     "Diagnostic": "诊断评估",
     "Surgical / Treatment Plan": "手术 / 治疗方案",
 }
-URGENCY_LABELS_MAP = {
+URGENCY_LABELS = {
     "Routine": "常规",
     "Priority": "优先",
     "Emergency": "紧急",
 }
-SEX_LABELS_MAP = {
+SEX_LABELS = {
     "Unknown": "未知",
     "Female": "女",
     "Male": "男",
     "Other": "其他",
 }
-INSURANCE_LABELS_MAP = {
+INSURANCE_LABELS = {
     "Resident insurance": "居民医保",
     "Employee insurance": "职工医保",
-    "Self-pay / uninsured": "自费 / 未参保",
+    "Self-pay / uninsured": "自费",
     "Commercial": "商业保险",
 }
-PROVIDER_LABELS_MAP = {
+PROVIDER_LABELS = {
     "DeepSeek": "DeepSeek",
     "GLM / BigModel": "GLM / BigModel",
     "Kimi": "Kimi",
-    "OpenAI Compatible": "OpenAI 兼容接口",
+    "OpenAI Compatible": "OpenAI 兼容",
     "Custom / Hospital Gateway": "自定义 / 医院网关",
 }
-ROLE_TEMPLATE_LABELS_MAP = {
+ROLE_LABELS = {
     "Orchestrator": "编排协调",
     "Planner": "规划分析",
     "Generator": "生成起草",
@@ -95,6 +116,7 @@ ROLE_TEMPLATE_LABELS_MAP = {
     "Imaging Reader": "影像解读",
     "Cost Estimator": "费用估算",
 }
+
 PROVIDER_PRESETS = {
     "DeepSeek": "https://api.deepseek.com",
     "GLM / BigModel": "https://open.bigmodel.cn/api/paas/v4",
@@ -102,16 +124,8 @@ PROVIDER_PRESETS = {
     "OpenAI Compatible": "",
     "Custom / Hospital Gateway": "",
 }
-ROLE_TEMPLATES = [
-    "Orchestrator",
-    "Planner",
-    "Generator",
-    "Fact Checker",
-    "Guideline Retriever",
-    "Web Search",
-    "Imaging Reader",
-    "Cost Estimator",
-]
+ROLE_TEMPLATES = list(ROLE_LABELS.keys())
+
 PROFILE_MIGRATIONS = {
     "Dr. Demo": "演示医生",
     "Consultant": "主任医师",
@@ -130,33 +144,33 @@ ROLE_SPEC_MIGRATIONS = {
     "Reserved for real deployment to retrieve recent consensus statements, local hospital pathways, and payer rules.": "用于正式部署时检索最新共识、院内路径与医保支付规则。",
 }
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def ui_label(value: str, mapping: dict[str, str]) -> str:
+def lbl(value: str, mapping: dict) -> str:
     return mapping.get(value, value)
 
 
-def migrate_profile_data(data: dict[str, str]) -> dict[str, str]:
-    migrated = dict(data)
+def migrate_profile(data: dict) -> dict:
+    d = dict(data)
     for key in ["user_name", "title", "hospital_name", "specialty_focus", "locale", "patient_population"]:
-        value = migrated.get(key)
-        if value in PROFILE_MIGRATIONS:
-            migrated[key] = PROFILE_MIGRATIONS[value]
-    return migrated
+        if d.get(key) in PROFILE_MIGRATIONS:
+            d[key] = PROFILE_MIGRATIONS[d.get(key)]
+    return d
 
 
-def migrate_role_specs(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
-    migrated_roles: list[AgentRoleConfig] = []
-    for role in roles:
-        migrated_roles.append(
-            AgentRoleConfig(
-                role_name=role.role_name,
-                role_spec=ROLE_SPEC_MIGRATIONS.get(role.role_spec, role.role_spec),
-                provider_name=role.provider_name,
-                agent_count=role.agent_count,
-            )
+def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
+    return [
+        AgentRoleConfig(
+            role_name=r.role_name,
+            role_spec=ROLE_SPEC_MIGRATIONS.get(r.role_spec, r.role_spec),
+            provider_name=r.provider_name,
+            agent_count=r.agent_count,
         )
-    return migrated_roles
+        for r in roles
+    ]
 
+
+# ── Storage ───────────────────────────────────────────────────────────────────
 
 def ensure_storage() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -170,15 +184,14 @@ def ensure_storage() -> None:
 
 def load_profile() -> AppProfile:
     data = load_json(PROFILE_PATH, asdict(default_profile()))
-    data = migrate_profile_data(data)
-    return AppProfile(**data)
+    return AppProfile(**migrate_profile(data))
 
 
 def load_settings() -> SystemSettings:
     data = load_json(SETTINGS_PATH, asdict(default_settings()))
-    providers = [APIProviderConfig(**item) for item in data.get("api_providers", [])]
-    roles = [AgentRoleConfig(**item) for item in data.get("agent_roles", [])]
-    roles = migrate_role_specs(roles)
+    providers = [APIProviderConfig(**p) for p in data.get("api_providers", [])]
+    roles = [AgentRoleConfig(**r) for r in data.get("agent_roles", [])]
+    roles = migrate_roles(roles)
     return SystemSettings(
         orchestration_mode=data.get("orchestration_mode", OrchestrationMode.ASYMMETRIC.value),
         default_department=data.get("default_department", DepartmentOption.PEDIATRICS.value),
@@ -191,907 +204,1475 @@ def load_settings() -> SystemSettings:
 
 
 def load_history() -> list[QueryHistoryItem]:
-    data = load_json(HISTORY_PATH, [])
-    return [QueryHistoryItem(**item) for item in data]
+    return [QueryHistoryItem(**item) for item in load_json(HISTORY_PATH, [])]
 
 
-def save_profile(profile: AppProfile) -> None:
-    save_json(PROFILE_PATH, asdict(profile))
+def save_profile(p: AppProfile) -> None:
+    save_json(PROFILE_PATH, asdict(p))
 
 
-def save_settings(settings: SystemSettings) -> None:
-    payload = asdict(settings)
-    save_json(SETTINGS_PATH, payload)
+def save_settings(s: SystemSettings) -> None:
+    save_json(SETTINGS_PATH, asdict(s))
 
 
-def save_history(history: list[QueryHistoryItem]) -> None:
-    save_json(HISTORY_PATH, [asdict(item) for item in history])
+def save_history(h: list[QueryHistoryItem]) -> None:
+    save_json(HISTORY_PATH, [asdict(i) for i in h])
 
 
-def init_state() -> None:
-    ensure_storage()
-    if "profile" not in st.session_state:
-        st.session_state.profile = load_profile()
-    if "settings" not in st.session_state:
-        st.session_state.settings = load_settings()
-    if "history" not in st.session_state:
-        st.session_state.history = load_history()
-    if "last_result" not in st.session_state:
-        st.session_state.last_result = None
-    if "active_view" not in st.session_state:
-        st.session_state.active_view = "Control Room"
-    if "diagnostic_pinned" not in st.session_state:
-        st.session_state.diagnostic_pinned = False
-
-
-def workspace_has_content() -> bool:
-    return any(
-        [
-            bool(st.session_state.get("ehr_paste_text", "").strip()),
-            bool(st.session_state.get("case_chief_complaint", "").strip()),
-            bool(st.session_state.get("case_summary", "").strip()),
-            st.session_state.get("last_result") is not None,
-        ]
-    )
-
-
-def should_use_compact_chrome(active_view: str) -> bool:
-    profile = st.session_state.get("profile")
-    if not profile or not profile.first_run_complete:
-        return False
-    if active_view != "Control Room":
-        return True
-    return workspace_has_content()
-
-
-def read_clipboard_text() -> str:
+def read_clipboard() -> str:
     try:
-        result = subprocess.run(
-            ["pbpaste"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.strip()
+        r = subprocess.run(["pbpaste"], check=True, capture_output=True, text=True)
+        return r.stdout.strip()
     except Exception:
         return ""
 
 
+def paste_clipboard_into_input() -> None:
+    text = read_clipboard()
+    if text:
+        existing = st.session_state.get("input_main", "").strip()
+        st.session_state["input_main"] = f"{existing}\n\n{text}".strip() if existing else text
+        st.rerun()
+    else:
+        st.warning("未读取到剪贴板内容")
+
+
+# ── Session state ─────────────────────────────────────────────────────────────
+
+def init_state() -> None:
+    ensure_storage()
+    defaults = {
+        "profile": load_profile(),
+        "settings": load_settings(),
+        "history": load_history(),
+        "active_view": "Control Room",
+        "history_focus": None,
+        "settings_workspace_section": SETTINGS_SECTIONS[0],
+        # Conversation messages: list of dicts
+        "messages": [],          # {"role": "user"|"assistant"|"system", "content": str, "meta": dict}
+        "input_expanded": False,  # Whether input card is in expanded mode
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
+
+
+def latest_result():
+    for message in reversed(st.session_state.messages):
+        if message.get("role") == "assistant":
+            return message.get("content")
+    return None
+
+
+def open_view(view: str) -> None:
+    st.session_state.active_view = view
+    if view != "History":
+        st.session_state.history_focus = None
+
+
+def open_settings_workspace(section: str = SETTINGS_SECTIONS[0]) -> None:
+    st.session_state.active_view = "Settings"
+    if section in SETTINGS_SECTIONS:
+        st.session_state.settings_workspace_section = section
+
+
+def focus_history_item(index: int) -> None:
+    st.session_state.history_focus = index
+
+
+def reset_workspace() -> None:
+    settings: SystemSettings = st.session_state.settings
+    st.session_state.messages = []
+    st.session_state.active_view = "Control Room"
+    st.session_state.history_focus = None
+    defaults = {
+        "input_main": "",
+        "input_dept": settings.default_department,
+        "input_style": OUTPUT_STYLES[0],
+        "input_urgency": URGENCY_OPTIONS[0],
+        "input_sex": SEX_OPTIONS[0],
+        "input_insurance": INSURANCE_OPTIONS[0],
+        "input_age": "",
+        "input_chief": "",
+        "input_expanded": False,
+    }
+    for key, value in defaults.items():
+        st.session_state[key] = value
+    for key in ["input_images", "input_docs"]:
+        st.session_state.pop(key, None)
+
+def render_sidebar_rail() -> None:
+    st.html(
+        """
+        <div style="height:0;overflow:visible">
+            <button
+                id="sidebar-toggle-rail"
+                type="button"
+                class="sidebar-toggle-rail"
+                aria-label="Toggle sidebar"
+                title="Toggle sidebar"
+            >
+                <span class="sidebar-toggle-rail-core"></span>
+            </button>
+        </div>
+        <script>
+            (() => {{
+                const body = window.document.body;
+                const rail = window.document.getElementById("sidebar-toggle-rail");
+                if (!rail) return;
+                const apply = (collapsed) => {{
+                    body.classList.toggle("sidebar-collapsed", collapsed);
+                    window.__raremdtSidebarCollapsed = collapsed;
+                }};
+                const read = () => window.__raremdtSidebarCollapsed === true;
+
+                apply(read());
+
+                if (rail.dataset.bound !== "1") {{
+                    rail.dataset.bound = "1";
+                    rail.addEventListener("click", (event) => {{
+                        event.preventDefault();
+                        const next = !body.classList.contains("sidebar-collapsed");
+                        apply(next);
+                    }});
+                }}
+            }})();
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
+
+
+def sync_sidebar_settings_defaults(settings: SystemSettings) -> None:
+    signature = (
+        settings.orchestration_mode,
+        settings.default_department,
+        float(settings.consensus_threshold),
+        int(settings.max_rounds),
+        bool(settings.show_diagnostics),
+    )
+    if st.session_state.get("sidebar_settings_signature") != signature:
+        st.session_state["sidebar_settings_signature"] = signature
+        st.session_state["sidebar_topology"] = settings.orchestration_mode
+        st.session_state["sidebar_dept"] = settings.default_department
+        st.session_state["sidebar_threshold"] = float(settings.consensus_threshold)
+        st.session_state["sidebar_rounds"] = int(settings.max_rounds)
+        st.session_state["sidebar_show_diag"] = bool(settings.show_diagnostics)
+
+
+def sync_sidebar_profile_defaults(profile: AppProfile) -> None:
+    signature = (
+        profile.user_name,
+        profile.title,
+        profile.hospital_name,
+        profile.department,
+        profile.specialty_focus,
+        profile.locale,
+        profile.patient_population,
+    )
+    if st.session_state.get("sidebar_profile_signature") != signature:
+        st.session_state["sidebar_profile_signature"] = signature
+        st.session_state["sidebar_pf_name"] = profile.user_name
+        st.session_state["sidebar_pf_title"] = profile.title
+        st.session_state["sidebar_pf_hospital"] = profile.hospital_name
+        st.session_state["sidebar_pf_dept"] = profile.department
+        st.session_state["sidebar_pf_specialty"] = profile.specialty_focus
+        st.session_state["sidebar_pf_locale"] = profile.locale
+        st.session_state["sidebar_pf_pop"] = profile.patient_population
+
+
+def render_sidebar_settings_panel() -> None:
+    settings: SystemSettings = st.session_state.settings
+    sync_sidebar_settings_defaults(settings)
+
+    st.selectbox(
+        "编排模式",
+        TOPOLOGIES,
+        key="sidebar_topology",
+        format_func=lambda x: lbl(x, TOPOLOGY_LABELS),
+    )
+    st.selectbox(
+        "默认科室",
+        DEPARTMENTS,
+        key="sidebar_dept",
+        format_func=lambda x: lbl(x, DEPT_LABELS),
+    )
+    st.slider("一致性阈值", 0.50, 0.99, key="sidebar_threshold")
+    st.slider("最大轮次", 1, 6, key="sidebar_rounds")
+    st.toggle("默认显示多智能体诊断", key="sidebar_show_diag")
+    st.caption(
+        f"{sum(1 for p in settings.api_providers if p.enabled)} 个接口已启用，"
+        f"{sum(r.agent_count for r in settings.agent_roles)} 个智能体工位已配置。"
+    )
+
+    if st.button("保存设置", key="sidebar_settings_save", use_container_width=True):
+        st.session_state.settings = SystemSettings(
+            orchestration_mode=st.session_state.get("sidebar_topology", settings.orchestration_mode),
+            default_department=st.session_state.get("sidebar_dept", settings.default_department),
+            consensus_threshold=float(st.session_state.get("sidebar_threshold", settings.consensus_threshold)),
+            max_rounds=int(st.session_state.get("sidebar_rounds", settings.max_rounds)),
+            show_diagnostics=bool(st.session_state.get("sidebar_show_diag", settings.show_diagnostics)),
+            api_providers=settings.api_providers,
+            agent_roles=settings.agent_roles,
+        )
+        save_settings(st.session_state.settings)
+        st.success("设置已保存。")
+
+
+def render_sidebar_profile_panel() -> None:
+    profile: AppProfile = st.session_state.profile
+    sync_sidebar_profile_defaults(profile)
+
+    st.text_input("医生姓名", key="sidebar_pf_name")
+    st.text_input("职称", key="sidebar_pf_title")
+    st.text_input("医院名称", key="sidebar_pf_hospital")
+    st.selectbox(
+        "所属科室",
+        DEPARTMENTS,
+        key="sidebar_pf_dept",
+        format_func=lambda x: lbl(x, DEPT_LABELS),
+    )
+    st.text_input("专业方向", key="sidebar_pf_specialty")
+    st.text_input("地区", key="sidebar_pf_locale")
+    st.text_area("服务人群 / 备注", key="sidebar_pf_pop", height=90)
+
+    if st.button("保存档案", key="sidebar_profile_save", use_container_width=True):
+        st.session_state.profile = AppProfile(
+            user_name=st.session_state.get("sidebar_pf_name", profile.user_name),
+            title=st.session_state.get("sidebar_pf_title", profile.title),
+            hospital_name=st.session_state.get("sidebar_pf_hospital", profile.hospital_name),
+            department=st.session_state.get("sidebar_pf_dept", profile.department),
+            specialty_focus=st.session_state.get("sidebar_pf_specialty", profile.specialty_focus),
+            locale=st.session_state.get("sidebar_pf_locale", profile.locale),
+            patient_population=st.session_state.get("sidebar_pf_pop", profile.patient_population),
+            first_run_complete=True,
+        )
+        save_profile(st.session_state.profile)
+        st.success("档案已保存。")
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
 def render_sidebar() -> None:
+    profile: AppProfile = st.session_state.profile
+    settings: SystemSettings = st.session_state.settings
+    history = st.session_state.history
+    enabled_providers = sum(1 for p in settings.api_providers if p.enabled)
+    total_agents = sum(r.agent_count for r in settings.agent_roles)
+
     with st.sidebar:
         st.markdown(
             """
             <div class="sidebar-brand">
-                <div class="brand-kicker">HKU-SZH · SZ Clin Center for Rare Dis</div>
-                <div class="brand-title">港大医院 罕见病多智能体诊疗系统</div>
-                <div class="brand-subtitle">multiagent for rare</div>
+                <div class="sidebar-brand-logo">
+                    <div class="sidebar-logo-mark">R</div>
+                    <div class="sidebar-logo-text">RareMDT</div>
+                </div>
+                <div class="sidebar-brand-sub">罕见病多智能体诊疗系统</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.session_state.active_view = st.radio(
-            "工作区",
-            WORKSPACE_VIEWS,
-            index=WORKSPACE_VIEWS.index(st.session_state.active_view),
-            format_func=lambda x: ui_label(x, WORKSPACE_VIEW_LABELS),
-            label_visibility="collapsed",
-        )
-        st.markdown("---")
-        st.caption("部署档案")
+
+        if st.button("＋ 新建病例", key="sidebar_new_case", use_container_width=True):
+            reset_workspace()
+            st.rerun()
+
         st.markdown(
             f"""
-            <div class="glass-card">
-                <div><strong>{st.session_state.profile.hospital_name}</strong></div>
-                <div>{ui_label(st.session_state.profile.department, DEPARTMENT_LABELS_MAP)}</div>
-                <div>{st.session_state.profile.user_name} · {st.session_state.profile.title}</div>
+            <div class="sidebar-status-strip">
+                <div class="sidebar-status-card">
+                    <div class="sidebar-status-label">接口</div>
+                    <div class="sidebar-status-value">{enabled_providers}</div>
+                </div>
+                <div class="sidebar-status-card">
+                    <div class="sidebar-status-label">智能体</div>
+                    <div class="sidebar-status-value">{total_agents}</div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="sidebar-section-label">最近记录</div>', unsafe_allow_html=True)
+        if history:
+            for index, item in enumerate(history[:6]):
+                button_label = item.title if len(item.title) <= 26 else item.title[:25] + "…"
+                if st.button(button_label, key=f"sidebar_history_{index}", use_container_width=True):
+                    focus_history_item(index)
+                    st.rerun()
+                st.caption(
+                    f"{item.timestamp} · {lbl(item.department, DEPT_LABELS)} · {item.consensus_score:.0%} 一致性"
+                )
+        else:
+            st.markdown(
+                """
+                <div class="sidebar-empty">
+                    暂无历史会诊记录。提交首个病例后，这里会显示最近结果。
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="sidebar-section-label">当前医生</div>', unsafe_allow_html=True)
         st.markdown(
-            """
+            f"""
+            <div class="sidebar-profile-card">
+                <div class="sidebar-profile-name">{escape(profile.user_name)}</div>
+                <div class="sidebar-profile-meta">{escape(profile.title)}</div>
+                <div class="sidebar-profile-meta">{escape(profile.hospital_name)}</div>
+                <div class="sidebar-profile-meta">{lbl(profile.department, DEPT_LABELS)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("⚙ 系统设置", expanded=False):
+            render_sidebar_settings_panel()
+            if st.button("在主区域打开系统设置", key="sidebar_open_settings_main", use_container_width=True):
+                open_settings_workspace("系统设置")
+                st.rerun()
+
+        with st.expander("医生档案", expanded=False):
+            render_sidebar_profile_panel()
+            if st.button("在主区域打开医生档案", key="sidebar_open_profile_main", use_container_width=True):
+                open_settings_workspace("医生档案")
+                st.rerun()
+
+        st.markdown(
+            f"""
             <div class="sidebar-footer">
-                conceived by PK Chen and executed by Pk Chen and Marco Xu.
+                RareMDT · 演示版本<br/>
+                PK Chen · Marco Xu
             </div>
             """,
             unsafe_allow_html=True,
         )
 
 
-def render_header() -> None:
-    st.markdown(
-        """
-        <section class="hero-shell hero-compact">
-            <div class="hero-left">
-                <div class="hero-kicker">Rare Disease Clinical Workspace</div>
-                <h1>病例输入与多智能体会诊</h1>
-                <p>
-                    将电子病历粘贴进主输入框，系统自动完成结构化抽取、会诊协同与临床级输出。
-                </p>
-            </div>
-            <div class="hero-right">
-                <div class="hero-badge">临床模式</div>
-                <div class="hero-chip">中国指南与国际共识</div>
-                <div class="hero-chip">可追溯协同过程</div>
-            </div>
-        </section>
-        """,
-        unsafe_allow_html=True,
+# ── Topbar ─────────────────────────────────────────────────────────────────────
+
+def render_topbar() -> None:
+    result = latest_result()
+    active_view = st.session_state.active_view
+    spacer_col, primary_action_col, diagnostics_col = st.columns(
+        [6.3, 1.0, 1.05],
+        gap="small",
     )
 
+    with spacer_col:
+        st.empty()
 
-def render_page_banner(active_view: str) -> None:
-    st.markdown(
-        f"""
-        <section class="page-banner">
-            <div class="page-banner-main">
-                <div class="page-banner-kicker">HKU-SZH · SZ Clin Center for Rare Dis</div>
-                <h1>港大医院 罕见病多智能体 诊疗系统</h1>
-                <p>面向临床多学科协作的罕见病智能诊疗工作台</p>
-            </div>
-            <div class="page-banner-side">
-                <div class="page-banner-view">{ui_label(active_view, WORKSPACE_VIEW_LABELS)}</div>
-                <div class="page-banner-chip">multiagent for rare</div>
-                <div class="page-banner-chip">clinical workspace</div>
-            </div>
-        </section>
-        """,
-        unsafe_allow_html=True,
+    with primary_action_col:
+        if active_view == "Control Room":
+            if st.button("清空重置", key="topbar_new_case", use_container_width=True):
+                reset_workspace()
+                st.rerun()
+        else:
+            if st.button("返回工作台", key="topbar_back_workspace", use_container_width=True):
+                open_view("Control Room")
+                st.rerun()
+
+    with diagnostics_col:
+        with st.popover("诊断面板", use_container_width=True):
+            render_diagnostics_popover(result)
+
+
+def render_diagnostics_popover(result) -> None:
+    if result is None:
+        st.info("提交病例后即可查看多智能体诊断。")
+        return
+
+    st.markdown("#### 多智能体诊断")
+    stat1, stat2, stat3 = st.columns(3)
+    stat1.metric("一致性", f"{result.consensus_score:.0%}")
+    stat2.metric("轮次", len(result.rounds))
+    stat3.metric("角色", len(result.agent_trace))
+    st.caption(
+        f"{lbl(result.department, DEPT_LABELS)} · {lbl(result.output_style, OUTPUT_LABELS)} · "
+        f"{lbl(result.topology_used, TOPOLOGY_LABELS)}"
     )
 
+    st.markdown("##### 收敛过程")
+    for round_info in result.rounds:
+        st.markdown(
+            f"""
+            <div class="diagnostic-round-card">
+                <div class="diagnostic-round-head">
+                    <span>第 {int(round_info['round'])} 轮</span>
+                    <span>{float(round_info['alignment']):.0%}</span>
+                </div>
+                <div class="diagnostic-round-copy">{escape(str(round_info['summary']))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.progress(float(round_info["alignment"]))
 
-def render_corner_heading(active_view: str) -> None:
+    st.markdown("##### 智能体工位")
+    for trace in result.agent_trace:
+        with st.expander(
+            f"{lbl(trace['role'], ROLE_LABELS)} · {lbl(trace['provider'], PROVIDER_LABELS)}",
+            expanded=False,
+        ):
+            st.write(trace["note"])
+
+
+# ── Conversation helpers ───────────────────────────────────────────────────────
+
+def add_user_message(
+    content: str,
+    department: str,
+    chief_complaint: str,
+    patient_age: str,
+    patient_sex: str,
+    insurance: str,
+    output_style: str,
+    urgency: str,
+) -> None:
+    meta = {
+        "department": department,
+        "chief_complaint": chief_complaint,
+        "patient_age": patient_age,
+        "patient_sex": patient_sex,
+        "insurance": insurance,
+        "output_style": output_style,
+        "urgency": urgency,
+        "timestamp": datetime.now().strftime("%H:%M"),
+    }
+    st.session_state.messages.append({"role": "user", "content": content, "meta": meta})
+
+
+def add_assistant_message(result) -> None:
+    meta = {
+        "title": result.title,
+        "department": result.department,
+        "output_style": result.output_style,
+        "consensus_score": result.consensus_score,
+        "topology": result.topology_used,
+        "timestamp": datetime.now().strftime("%H:%M"),
+    }
+    st.session_state.messages.append({"role": "assistant", "content": result, "meta": meta})
+
+
+# ── Message rendering ──────────────────────────────────────────────────────────
+
+def _render_user_message(content: str, meta: dict, ts: str) -> None:
+    dept = lbl(meta.get("department", ""), DEPT_LABELS)
+    sex = lbl(meta.get("patient_sex", ""), SEX_LABELS)
+    age = meta.get("patient_age", "")
+    insurance = lbl(meta.get("insurance", ""), INSURANCE_LABELS)
+    urgency = lbl(meta.get("urgency", ""), URGENCY_LABELS)
+    output_style = lbl(meta.get("output_style", ""), OUTPUT_LABELS)
+
+    chips = []
+    if dept: chips.append(f'<span class="msg-dept-chip">{escape(dept)}</span>')
+    if urgency: chips.append(f'<span style="font-size:0.68rem;color:var(--accent);background:var(--accent-soft);padding:0.12rem 0.5rem;border-radius:999px;font-weight:600">{escape(urgency)}</span>')
+    chips_html = " ".join(chips)
+
+    summary_lines = []
+    if meta.get("chief_complaint"):
+        summary_lines.append(f"**主诉**：{escape(meta.get('chief_complaint', ''))}")
+    if age or sex:
+        summary_lines.append(f"**患者**：{escape(age)} {escape(sex)}")
+    if insurance:
+        summary_lines.append(f"**医保**：{escape(insurance)}")
+    if meta.get("output_style"):
+        summary_lines.append(f"**输出模式**：{escape(output_style)}")
+
+    summary_html = ""
+    if summary_lines:
+        summary_html = (
+            '<div style="margin-bottom:0.7rem;padding:0.6rem 0.8rem;background:var(--bg-elevated);border:1px solid var(--border-subtle);border-radius:var(--radius-md);font-size:0.82rem;color:var(--text-secondary);line-height:1.6">'
+            + "<br>".join(summary_lines)
+            + "</div>"
+        )
+
     st.markdown(
         f"""
-        <div class="compact-corner-heading">
-            <div class="compact-corner-title">港大医院 罕见病多智能体 诊疗系统</div>
-            <div class="compact-corner-view">{ui_label(active_view, WORKSPACE_VIEW_LABELS)}</div>
+        <div class="msg-card">
+            <div class="msg-avatar msg-avatar-user">U</div>
+            <div class="msg-body">
+                <div class="msg-meta">
+                    <span class="msg-role">你</span>
+                    {chips_html}
+                    <span class="msg-time">{ts}</span>
+                </div>
+                <div class="msg-content">{summary_html}<div>{escape(content)}</div></div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_button_field_label(label: str) -> None:
-    st.markdown(f'<div class="control-label">{label}</div>', unsafe_allow_html=True)
+def _render_assistant_message(result, meta: dict, ts: str) -> None:
+    dept = lbl(meta.get("department", ""), DEPT_LABELS)
+    output_style = lbl(meta.get("output_style", ""), OUTPUT_LABELS)
+    consensus = meta.get("consensus_score", 0)
+    topology = lbl(meta.get("topology", ""), TOPOLOGY_LABELS)
+    title = meta.get("title", "")
+
+    consensus_color = (
+        "var(--green)" if consensus >= 0.85
+        else "var(--accent)" if consensus >= 0.70
+        else "var(--red)"
+    )
+    consensus_bg = (
+        "var(--green-soft)" if consensus >= 0.85
+        else "var(--accent-soft)" if consensus >= 0.70
+        else "var(--red-soft)"
+    )
+
+    chips_html = ""
+    if dept:
+        chips_html += f'<span class="msg-dept-chip">{escape(dept)}</span>'
+    if output_style:
+        chips_html += f'<span style="font-size:0.68rem;color:var(--blue);background:var(--blue-soft);padding:0.12rem 0.5rem;border-radius:999px;font-weight:600">{escape(output_style)}</span>'
+    chips_html += f'<span style="font-size:0.68rem;color:{consensus_color};background:{consensus_bg};padding:0.12rem 0.5rem;border-radius:999px;font-weight:600">{consensus:.0%} 一致性</span>'
+
+    st.markdown(
+        f"""
+        <div class="msg-card">
+            <div class="msg-avatar msg-avatar-claude">R</div>
+            <div class="msg-body">
+                <div class="msg-meta">
+                    <span class="msg-role">RareMDT 智能体团队</span>
+                    {chips_html}
+                    <span class="msg-time">{ts}</span>
+                </div>
+                <div class="msg-content">
+                    <h2 style="font-size:1.05rem;margin:0 0 0.6rem">{escape(title)}</h2>
+                    <p style="color:var(--text-secondary);margin:0 0 1rem;font-size:0.88rem">{escape(result.executive_summary)}</p>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def render_metric_strip(settings: SystemSettings, history: list[QueryHistoryItem]) -> None:
-    cols = st.columns(4)
-    cols[0].metric("已配置接口", len(settings.api_providers))
-    cols[1].metric("智能体数量", sum(role.agent_count for role in settings.agent_roles))
-    cols[2].metric("一致性阈值", f"{settings.consensus_threshold:.0%}")
-    cols[3].metric("历史查询", len(history))
+# ── Input area ─────────────────────────────────────────────────────────────────
 
-
-def render_profile_view() -> None:
-    st.subheader("首次使用档案")
-    profile = st.session_state.profile
+def render_input_area() -> None:
+    """Primary composer surface for new case submission."""
+    settings: SystemSettings = st.session_state.settings
     with st.container(border=True):
-        with st.form("profile_form"):
-            c1, c2 = st.columns(2)
-            user_name = c1.text_input("医生 / 用户姓名", profile.user_name)
-            title = c2.text_input("职称", profile.title)
-            c3, c4 = st.columns(2)
-            hospital_name = c3.text_input("医院名称", profile.hospital_name)
-            department = c4.selectbox(
-                "所属科室",
-                DEPARTMENTS,
-                index=DEPARTMENTS.index(profile.department),
-                format_func=lambda x: ui_label(x, DEPARTMENT_LABELS_MAP),
-            )
-            c5, c6 = st.columns(2)
-            specialty = c5.text_input("专业方向", profile.specialty_focus)
-            locale = c6.text_input("地区", profile.locale)
-            patient_population = st.text_area("服务人群 / 备注", profile.patient_population, height=100)
-            submitted = st.form_submit_button("保存档案", use_container_width=True)
-            if submitted:
-                st.session_state.profile = AppProfile(
-                    user_name=user_name,
-                    title=title,
-                    hospital_name=hospital_name,
-                    department=department,
-                    specialty_focus=specialty,
-                    locale=locale,
-                    patient_population=patient_population,
-                    first_run_complete=True,
-                )
-                save_profile(st.session_state.profile)
-                st.success("档案已保存。")
-
-
-def sync_settings_widget_defaults(settings: SystemSettings) -> None:
-    st.session_state.setdefault("settings_topology", settings.orchestration_mode)
-    st.session_state.setdefault("settings_default_department", settings.default_department)
-    st.session_state.setdefault("settings_consensus_threshold", float(settings.consensus_threshold))
-    st.session_state.setdefault("settings_max_rounds", int(settings.max_rounds))
-    st.session_state.setdefault("settings_show_diagnostics", bool(settings.show_diagnostics))
-
-    for idx, provider in enumerate(settings.api_providers):
-        st.session_state.setdefault(f"provider_name_{idx}", provider.provider_name)
-        st.session_state.setdefault(f"model_name_{idx}", provider.model_name)
-        st.session_state.setdefault(f"endpoint_{idx}", provider.endpoint)
-        st.session_state.setdefault(f"api_key_{idx}", provider.api_key)
-        st.session_state.setdefault(f"agents_for_api_{idx}", int(provider.agents_for_api))
-        st.session_state.setdefault(f"enabled_{idx}", bool(provider.enabled))
-
-    for idx, role in enumerate(settings.agent_roles):
-        st.session_state.setdefault(f"role_name_{idx}", role.role_name)
-        st.session_state.setdefault(f"assigned_provider_{idx}", role.provider_name)
-        st.session_state.setdefault(f"role_count_{idx}", int(role.agent_count))
-        st.session_state.setdefault(f"role_spec_{idx}", role.role_spec)
-
-
-def clear_removed_widget_state(prefixes: list[str], start_index: int, end_index: int) -> None:
-    for idx in range(start_index, end_index):
-        for prefix in prefixes:
-            key = f"{prefix}_{idx}"
-            if key in st.session_state:
-                del st.session_state[key]
-
-
-def ensure_choice_state(key: str, options: list[str], fallback: str | None = None) -> None:
-    if not options:
-        return
-    preferred = fallback if fallback in options else options[0]
-    current = st.session_state.get(key)
-    if current not in options:
-        st.session_state[key] = preferred
-
-
-def collect_provider_configs(settings: SystemSettings) -> list[APIProviderConfig]:
-    providers: list[APIProviderConfig] = []
-    for idx in range(len(settings.api_providers)):
-        providers.append(
-            APIProviderConfig(
-                provider_name=st.session_state.get(f"provider_name_{idx}", "DeepSeek"),
-                model_name=st.session_state.get(f"model_name_{idx}", ""),
-                endpoint=st.session_state.get(f"endpoint_{idx}", ""),
-                api_key=st.session_state.get(f"api_key_{idx}", ""),
-                agents_for_api=int(st.session_state.get(f"agents_for_api_{idx}", 0)),
-                enabled=bool(st.session_state.get(f"enabled_{idx}", True)),
-            )
+        st.markdown(
+            """
+            <div class="composer-head">
+                <div class="composer-head-copy">
+                    <div class="composer-eyebrow">RareMDT Intake</div>
+                    <div class="composer-title">病例输入区</div>
+                    <div class="composer-copy">粘贴病历摘要，系统会自动预填结构化字段并启动多智能体会诊。</div>
+                </div>
+                <div class="composer-head-badge">结构化解析 + 协作诊断</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    return providers
-
-
-def collect_role_configs(settings: SystemSettings) -> list[AgentRoleConfig]:
-    roles: list[AgentRoleConfig] = []
-    fallback_provider = "DeepSeek"
-    for idx in range(len(settings.agent_roles)):
-        roles.append(
-            AgentRoleConfig(
-                role_name=st.session_state.get(f"role_name_{idx}", "Orchestrator"),
-                role_spec=st.session_state.get(f"role_spec_{idx}", ""),
-                provider_name=st.session_state.get(f"assigned_provider_{idx}", fallback_provider),
-                agent_count=int(st.session_state.get(f"role_count_{idx}", 1)),
-            )
+        enabled_providers = sum(1 for p in settings.api_providers if p.enabled)
+        total_agents = sum(r.agent_count for r in settings.agent_roles)
+        st.markdown(
+            f"""
+            <div class="stats-strip">
+                <div class="stat-pill">
+                    <div class="stat-pill-dot"></div>
+                    {enabled_providers} 接口已配置
+                </div>
+                <div class="stat-pill">
+                    <div class="stat-pill-dot"></div>
+                    {total_agents} 智能体就绪
+                </div>
+                <div class="stat-pill">
+                    <div class="stat-pill-dot stat-pill-dot-warning"></div>
+                    演示模式 · 模拟输出
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    return roles
+
+        if st.session_state.get("input_expanded", False):
+            _render_expanded_input(settings)
+        else:
+            _render_compact_input(settings)
 
 
-def render_provider_editor(settings: SystemSettings) -> list[APIProviderConfig]:
-    st.markdown("### 接口配置矩阵")
-    providers: list[APIProviderConfig] = []
-    for idx, provider in enumerate(settings.api_providers):
-        ensure_choice_state(
-            f"provider_name_{idx}",
-            list(PROVIDER_PRESETS.keys()),
-            provider.provider_name,
-        )
-        with st.container(border=True):
-            left, middle, right = st.columns([1.2, 1.2, 1.1])
-            provider_name = left.selectbox(
-                f"接口 {idx + 1}",
-                list(PROVIDER_PRESETS.keys()),
-                key=f"provider_name_{idx}",
-                format_func=lambda x: ui_label(x, PROVIDER_LABELS_MAP),
+def _render_compact_input(settings: SystemSettings) -> None:
+    """Single-line input: textarea + send button."""
+    # Ensure defaults
+    st.session_state.setdefault("input_main", "")
+    st.session_state.setdefault("input_dept", settings.default_department)
+    st.session_state.setdefault("input_style", OUTPUT_STYLES[0])
+    st.session_state.setdefault("input_urgency", URGENCY_OPTIONS[0])
+    st.session_state.setdefault("input_sex", SEX_OPTIONS[0])
+    st.session_state.setdefault("input_insurance", INSURANCE_OPTIONS[0])
+    st.session_state.setdefault("input_age", "")
+    st.session_state.setdefault("input_chief", "")
+
+    # Expand toggle (checkbox return value IS the state — no manual assignment needed)
+    with st.container():
+        actions_col, toggle_col = st.columns([0.8, 0.2])
+        with actions_col:
+            st.markdown(
+                """
+                <div class="quick-actions">
+                    <span class="quick-chip quick-chip-active">快速录入</span>
+                    <span class="quick-chip">科室：""" + lbl(settings.default_department, DEPT_LABELS) + """</span>
+                    <span class="quick-chip">""" + lbl(OUTPUT_STYLES[0], OUTPUT_LABELS) + """</span>
+                    <span class="quick-chip">""" + lbl(URGENCY_OPTIONS[0], URGENCY_LABELS) + """</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
-            model_name = middle.text_input("模型名称", key=f"model_name_{idx}")
-            endpoint = right.text_input("接口地址", key=f"endpoint_{idx}")
-            a, b, c, d = st.columns([1.2, 1.2, 1.2, 1])
-            api_key = a.text_input("接口密钥 / Token", type="password", key=f"api_key_{idx}")
-            with b:
-                render_button_field_label("快捷操作")
-            quick_paste = b.button("快速填入", key=f"quick_paste_{idx}", use_container_width=True)
-            agents_for_api = c.number_input(
-                "该接口智能体数",
-                min_value=0,
-                max_value=12,
-                key=f"agents_for_api_{idx}",
-            )
-            enabled = d.toggle("启用", key=f"enabled_{idx}")
-
-            if quick_paste and not endpoint:
-                st.session_state[f"endpoint_{idx}"] = PROVIDER_PRESETS[provider_name]
-                endpoint = st.session_state[f"endpoint_{idx}"]
-
-            providers.append(
-                APIProviderConfig(
-                    provider_name=provider_name,
-                    model_name=model_name,
-                    endpoint=endpoint,
-                    api_key=api_key,
-                    agents_for_api=agents_for_api,
-                    enabled=enabled,
-                )
+        with toggle_col:
+            expanded = st.toggle(
+                "高级模式",
+                key="input_expanded",
+                value=st.session_state.get("input_expanded", False),
+                label_visibility="visible",
             )
 
-    st.markdown('<div class="action-row-label">接口操作</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
-    if c1.button("新增接口", use_container_width=True):
-        new_index = len(settings.api_providers)
-        settings.api_providers.append(APIProviderConfig())
-        st.session_state[f"provider_name_{new_index}"] = "DeepSeek"
-        st.session_state[f"model_name_{new_index}"] = "deepseek-chat"
-        st.session_state[f"endpoint_{new_index}"] = ""
-        st.session_state[f"api_key_{new_index}"] = ""
-        st.session_state[f"agents_for_api_{new_index}"] = 2
-        st.session_state[f"enabled_{new_index}"] = True
-        st.rerun()
-    if c2.button("删除最后一个接口", use_container_width=True):
-        if settings.api_providers:
-            removed_index = len(settings.api_providers) - 1
-            settings.api_providers.pop()
-            clear_removed_widget_state(
-                ["provider_name", "model_name", "endpoint", "api_key", "agents_for_api", "enabled"],
-                removed_index,
-                removed_index + 1,
-            )
-            st.rerun()
-    return providers
-
-
-def render_role_editor(settings: SystemSettings) -> list[AgentRoleConfig]:
-    st.markdown("### 智能体角色工位")
-    roles: list[AgentRoleConfig] = []
-    provider_names = [provider.provider_name for provider in settings.api_providers] or ["DeepSeek"]
-    for idx, role in enumerate(settings.agent_roles):
-        ensure_choice_state(f"role_name_{idx}", ROLE_TEMPLATES, role.role_name)
-        ensure_choice_state(f"assigned_provider_{idx}", provider_names, role.provider_name)
-        with st.container(border=True):
-            top_a, top_b, top_c = st.columns([1.1, 1.2, 0.8])
-            role_name = top_a.selectbox(
-                f"角色 {idx + 1}",
-                ROLE_TEMPLATES,
-                key=f"role_name_{idx}",
-                format_func=lambda x: ui_label(x, ROLE_TEMPLATE_LABELS_MAP),
-            )
-            assigned_provider = top_b.selectbox(
-                "绑定接口",
-                provider_names,
-                key=f"assigned_provider_{idx}",
-                format_func=lambda x: ui_label(x, PROVIDER_LABELS_MAP),
-            )
-            agent_count = top_c.number_input(
-                "该角色智能体数",
-                min_value=1,
-                max_value=12,
-                key=f"role_count_{idx}",
-            )
-            role_spec = st.text_area(
-                "角色说明",
-                height=110,
-                key=f"role_spec_{idx}",
-            )
-            roles.append(
-                AgentRoleConfig(
-                    role_name=role_name,
-                    role_spec=role_spec,
-                    provider_name=assigned_provider,
-                    agent_count=agent_count,
-                )
-            )
-
-    st.markdown('<div class="action-row-label">角色操作</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns([1, 1])
-    if c1.button("新增角色", use_container_width=True):
-        provider_name = settings.api_providers[0].provider_name if settings.api_providers else "DeepSeek"
-        new_index = len(settings.agent_roles)
-        settings.agent_roles.append(AgentRoleConfig(provider_name=provider_name))
-        st.session_state[f"role_name_{new_index}"] = "Orchestrator"
-        st.session_state[f"assigned_provider_{new_index}"] = provider_name
-        st.session_state[f"role_count_{new_index}"] = 1
-        st.session_state[f"role_spec_{new_index}"] = AgentRoleConfig(provider_name=provider_name).role_spec
-        st.rerun()
-    if c2.button("删除最后一个角色", use_container_width=True):
-        if settings.agent_roles:
-            removed_index = len(settings.agent_roles) - 1
-            settings.agent_roles.pop()
-            clear_removed_widget_state(
-                ["role_name", "assigned_provider", "role_count", "role_spec"],
-                removed_index,
-                removed_index + 1,
-            )
-            st.rerun()
-    return roles
-
-
-def sync_case_widget_defaults(settings: SystemSettings) -> None:
-    st.session_state.setdefault("ehr_paste_text", "")
-    st.session_state.setdefault("case_department", settings.default_department)
-    st.session_state.setdefault("case_output_style", OUTPUT_STYLES[0])
-    st.session_state.setdefault("case_urgency", URGENCY_OPTIONS[0])
-    st.session_state.setdefault("case_chief_complaint", "")
-    st.session_state.setdefault("case_summary", "")
-    st.session_state.setdefault("case_patient_age", "")
-    st.session_state.setdefault("case_patient_sex", SEX_OPTIONS[0])
-    st.session_state.setdefault("case_insurance_type", INSURANCE_OPTIONS[0])
-    st.session_state.setdefault("case_show_process", bool(settings.show_diagnostics))
-
-    ensure_choice_state("case_department", DEPARTMENTS, settings.default_department)
-    ensure_choice_state("case_output_style", OUTPUT_STYLES, OUTPUT_STYLES[0])
-    ensure_choice_state("case_urgency", URGENCY_OPTIONS, URGENCY_OPTIONS[0])
-    ensure_choice_state("case_patient_sex", SEX_OPTIONS, SEX_OPTIONS[0])
-    ensure_choice_state("case_insurance_type", INSURANCE_OPTIONS, INSURANCE_OPTIONS[0])
-
-
-def apply_case_prefill(prefill: IntakePrefill, settings: SystemSettings) -> None:
-    st.session_state["case_department"] = prefill.department or settings.default_department
-    st.session_state["case_output_style"] = prefill.output_style or OUTPUT_STYLES[0]
-    st.session_state["case_urgency"] = prefill.urgency or URGENCY_OPTIONS[0]
-    st.session_state["case_chief_complaint"] = prefill.chief_complaint
-    st.session_state["case_summary"] = prefill.case_summary
-    st.session_state["case_patient_age"] = prefill.patient_age
-    st.session_state["case_patient_sex"] = prefill.patient_sex or SEX_OPTIONS[0]
-    st.session_state["case_insurance_type"] = prefill.insurance_type or INSURANCE_OPTIONS[0]
-
-
-def reset_case_prefill(settings: SystemSettings) -> None:
-    st.session_state["ehr_paste_text"] = ""
-    st.session_state["case_department"] = settings.default_department
-    st.session_state["case_output_style"] = OUTPUT_STYLES[0]
-    st.session_state["case_urgency"] = URGENCY_OPTIONS[0]
-    st.session_state["case_chief_complaint"] = ""
-    st.session_state["case_summary"] = ""
-    st.session_state["case_patient_age"] = ""
-    st.session_state["case_patient_sex"] = SEX_OPTIONS[0]
-    st.session_state["case_insurance_type"] = INSURANCE_OPTIONS[0]
-    st.session_state["case_show_process"] = bool(settings.show_diagnostics)
-
-
-def render_ehr_autofill_panel(settings: SystemSettings) -> None:
-    with st.container(border=True):
+        st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
         st.text_area(
-            "粘贴病历原文",
-            key="ehr_paste_text",
-            height=240,
-            placeholder="像 Codex / Claude 一样，把病历整段贴进来。你也可以直接点击下方“从剪贴板粘贴”，无需手动 Ctrl+V。",
+            "病例摘要",
+            key="input_main",
+            height=96,
+            placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
+            label_visibility="collapsed",
         )
-        action_left, action_mid, action_right = st.columns([1, 1, 1])
-        autofilled = False
-        cleared = False
-        pasted = False
-        if action_left.button("从剪贴板粘贴", use_container_width=True):
-            clipboard_text = read_clipboard_text()
-            if clipboard_text:
-                st.session_state["ehr_paste_text"] = clipboard_text
-                pasted = True
-            else:
-                st.warning("没有读取到可用剪贴板文本。请确认系统剪贴板中已有病历内容。")
 
-        if action_mid.button("自动填充接诊字段", use_container_width=True):
-            pasted_text = st.session_state.get("ehr_paste_text", "").strip()
-            if pasted_text:
-                prefill = parse_ehr_intake(pasted_text, settings.default_department)
-                apply_case_prefill(prefill, settings)
-                autofilled = True
-            else:
-                st.warning("请先粘贴病历文本，再点击“自动填充接诊字段”。")
+        if expanded:
+            st.markdown('<div class="composer-section-label">快速补充信息</div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([1.2, 0.8, 1.0])
+            with c1:
+                st.text_input("主诉", key="input_chief", placeholder="主要症状")
+            with c2:
+                st.text_input("年龄", key="input_age", placeholder="e.g. 3岁")
+            with c3:
+                st.selectbox(
+                    "医保",
+                    INSURANCE_OPTIONS,
+                    key="input_insurance",
+                    format_func=lambda x: lbl(x, INSURANCE_LABELS),
+                )
+            c4, c5 = st.columns([1.2, 1.0])
+            with c4:
+                st.selectbox(
+                    "科室",
+                    DEPARTMENTS,
+                    key="input_dept",
+                    format_func=lambda x: lbl(x, DEPT_LABELS),
+                )
+            with c5:
+                st.radio(
+                    "输出模式",
+                    OUTPUT_STYLES,
+                    key="input_style",
+                    format_func=lambda x: lbl(x, OUTPUT_LABELS),
+                    horizontal=True,
+                )
 
-        if action_right.button("清空已解析字段", use_container_width=True):
-            reset_case_prefill(settings)
-            cleared = True
-
-        if pasted:
-            st.success("系统已从剪贴板读取文本并写入病历输入框。")
-        if autofilled:
-            st.success(
-                "系统已根据粘贴病历自动填入结构化接诊字段。"
-                "请在提交前由临床医生复核并修正需要调整的内容。"
+        st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
+        img_col, doc_col, paste_col, send_col = st.columns([1.1, 1.1, 0.24, 0.92])
+        with img_col:
+            st.file_uploader(
+                "影像",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="input_images",
+                accept_multiple_files=True,
+                label_visibility="collapsed",
             )
-        if cleared:
-            st.info("已清空病历粘贴区及结构化接诊字段。")
-
-
-def render_settings_view() -> None:
-    settings = st.session_state.settings
-    sync_settings_widget_defaults(settings)
-    ensure_choice_state("settings_topology", TOPOLOGIES, settings.orchestration_mode)
-    ensure_choice_state("settings_default_department", DEPARTMENTS, settings.default_department)
-
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns(4)
-        c1.selectbox(
-            "编排模式",
-            TOPOLOGIES,
-            key="settings_topology",
-            format_func=lambda x: ui_label(x, TOPOLOGY_LABELS_MAP),
-        )
-        c2.selectbox(
-            "默认科室",
-            DEPARTMENTS,
-            key="settings_default_department",
-            format_func=lambda x: ui_label(x, DEPARTMENT_LABELS_MAP),
-        )
-        c3.slider(
-            "一致性阈值",
-            0.5,
-            0.99,
-            0.01,
-            key="settings_consensus_threshold",
-        )
-        c4.slider(
-            "最大收敛轮次",
-            1,
-            6,
-            1,
-            key="settings_max_rounds",
-        )
-        st.toggle(
-            "默认显示收敛诊断窗",
-            key="settings_show_diagnostics",
-        )
-
-    if st.session_state.get("settings_topology") == OrchestrationMode.SYMMETRIC.value:
-        st.info(
-            "对称模式会让不同角色在推理时共享同一启用中的模型接口，"
-            "更利于快速收敛并保持输出口径统一。"
-        )
-    else:
-        st.info(
-            "非对称模式允许不同角色绑定不同模型接口，"
-            "适合把规划、生成、核查、检索等能力分开配置。"
-        )
-
-    providers = render_provider_editor(settings)
-    roles = render_role_editor(settings)
-
-    st.markdown('<div class="action-row-label">配置操作</div>', unsafe_allow_html=True)
-    save_col, reset_col = st.columns([1, 1])
-    if save_col.button("保存设置", use_container_width=True):
-        st.session_state.settings = SystemSettings(
-            orchestration_mode=st.session_state.get("settings_topology", settings.orchestration_mode),
-            default_department=st.session_state.get("settings_default_department", settings.default_department),
-            consensus_threshold=float(st.session_state.get("settings_consensus_threshold", settings.consensus_threshold)),
-            max_rounds=int(st.session_state.get("settings_max_rounds", settings.max_rounds)),
-            show_diagnostics=bool(st.session_state.get("settings_show_diagnostics", settings.show_diagnostics)),
-            api_providers=providers,
-            agent_roles=roles,
-        )
-        save_settings(st.session_state.settings)
-        st.success("系统设置已保存。")
-
-    if reset_col.button("重新载入已保存设置", use_container_width=True):
-        st.session_state.settings = load_settings()
-        reloaded = st.session_state.settings
-        st.session_state["settings_topology"] = reloaded.orchestration_mode
-        st.session_state["settings_default_department"] = reloaded.default_department
-        st.session_state["settings_consensus_threshold"] = float(reloaded.consensus_threshold)
-        st.session_state["settings_max_rounds"] = int(reloaded.max_rounds)
-        st.session_state["settings_show_diagnostics"] = bool(reloaded.show_diagnostics)
-        clear_removed_widget_state(
-            ["provider_name", "model_name", "endpoint", "api_key", "agents_for_api", "enabled"],
-            len(reloaded.api_providers),
-            20,
-        )
-        clear_removed_widget_state(
-            ["role_name", "assigned_provider", "role_count", "role_spec"],
-            len(reloaded.agent_roles),
-            20,
-        )
-        st.rerun()
-
-
-def collect_submission() -> CaseSubmission:
-    settings = st.session_state.settings
-    with st.container(border=True):
-        with st.form("case_form"):
-            top_left, top_right = st.columns([1, 1.4])
-            department = top_left.selectbox(
-                "科室",
-                DEPARTMENTS,
-                key="case_department",
-                format_func=lambda x: ui_label(x, DEPARTMENT_LABELS_MAP),
+        with doc_col:
+            st.file_uploader(
+                "文档",
+                type=["pdf", "txt", "docx"],
+                key="input_docs",
+                accept_multiple_files=True,
+                label_visibility="collapsed",
             )
-            chief_complaint = top_right.text_input("主诉", key="case_chief_complaint")
+        with paste_col:
+            if st.button(
+                " ",
+                key="paste_clipboard_compact",
+                icon=":material/content_paste:",
+                help="从剪贴板粘贴病历",
+                width="stretch",
+                type="tertiary",
+            ):
+                paste_clipboard_into_input()
+        with send_col:
+            if st.button("启动会诊", key="send_btn", help="启动多智能体会诊", use_container_width=True, type="primary"):
+                _handle_submit(settings)
 
-            mode_col, urgency_col = st.columns([1.25, 1])
-            output_style = mode_col.radio(
-                "输出模式",
-                OUTPUT_STYLES,
-                key="case_output_style",
-                format_func=lambda x: ui_label(x, OUTPUT_STYLE_LABELS_MAP),
-                horizontal=True,
-            )
-            urgency = urgency_col.radio(
-                "紧急程度",
-                URGENCY_OPTIONS,
-                key="case_urgency",
-                format_func=lambda x: ui_label(x, URGENCY_LABELS_MAP),
-                horizontal=True,
-            )
 
-            case_summary = st.text_area(
-                "临床摘要",
-                key="case_summary",
-                placeholder="病史、查体、影像/检验摘要、疑似罕见病路径、鉴别诊断要点等……",
-                height=160,
-            )
+def _render_expanded_input(settings: SystemSettings) -> None:
+    """Full-featured input form — all fields visible, no toggle needed."""
+    # Ensure defaults
+    for key, val in {
+        "input_main": "",
+        "input_dept": settings.default_department,
+        "input_style": OUTPUT_STYLES[0],
+        "input_urgency": URGENCY_OPTIONS[0],
+        "input_sex": SEX_OPTIONS[0],
+        "input_insurance": INSURANCE_OPTIONS[0],
+        "input_age": "",
+        "input_chief": "",
+    }.items():
+        st.session_state.setdefault(key, val)
 
-            p1, p2 = st.columns([0.8, 1.2])
-            age = p1.text_input("年龄", key="case_patient_age")
-            sex = p2.radio(
+    with st.container():
+        st.markdown(
+            """
+            <div class="quick-actions">
+                <span class="quick-chip quick-chip-active">完整表单模式</span>
+                <span class="quick-chip">支持上传影像与文档</span>
+                <span class="quick-chip">支持自动解析病历</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
+        st.text_area(
+            "病例摘要",
+            key="input_main",
+            height=120,
+            placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
+            label_visibility="collapsed",
+        )
+
+        st.markdown('<div class="composer-section-label">患者与病例信息</div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns([1.2, 0.8, 0.8, 1.0])
+        with c1:
+            st.text_input("主诉", key="input_chief", placeholder="主要症状")
+        with c2:
+            st.text_input("年龄", key="input_age", placeholder="e.g. 3岁")
+        with c3:
+            st.radio(
                 "性别",
                 SEX_OPTIONS,
-                key="case_patient_sex",
-                format_func=lambda x: ui_label(x, SEX_LABELS_MAP),
+                key="input_sex",
+                format_func=lambda x: lbl(x, SEX_LABELS),
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+        with c4:
+            st.selectbox(
+                "医保",
+                INSURANCE_OPTIONS,
+                key="input_insurance",
+                format_func=lambda x: lbl(x, INSURANCE_LABELS),
+            )
+
+        # Second row
+        c5, c6, c7 = st.columns([1.2, 1.0, 0.9])
+        with c5:
+            st.selectbox(
+                "科室",
+                DEPARTMENTS,
+                key="input_dept",
+                format_func=lambda x: lbl(x, DEPT_LABELS),
+            )
+        with c6:
+            st.radio(
+                "输出模式",
+                OUTPUT_STYLES,
+                key="input_style",
+                format_func=lambda x: lbl(x, OUTPUT_LABELS),
                 horizontal=True,
             )
-            insurance = st.radio(
-                "医保类型",
-                INSURANCE_OPTIONS,
-                key="case_insurance_type",
-                format_func=lambda x: ui_label(x, INSURANCE_LABELS_MAP),
+        with c7:
+            st.radio(
+                "紧急程度",
+                URGENCY_OPTIONS,
+                key="input_urgency",
+                format_func=lambda x: lbl(x, URGENCY_LABELS),
                 horizontal=True,
             )
 
-            multimodal_images = st.file_uploader(
+        st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
+        fu1, fu2 = st.columns(2)
+        with fu1:
+            st.file_uploader(
                 "上传影像 / 照片",
                 type=["png", "jpg", "jpeg", "webp"],
+                key="input_images",
                 accept_multiple_files=True,
             )
-            multimodal_docs = st.file_uploader(
-                "上传报告 / PDF / DOCX",
+        with fu2:
+            st.file_uploader(
+                "上传报告 / PDF",
                 type=["pdf", "txt", "docx"],
+                key="input_docs",
                 accept_multiple_files=True,
             )
 
-            show_process = st.toggle("启用右侧收敛诊断抽屉", key="case_show_process")
-            submitted = st.form_submit_button("启动多智能体会诊", use_container_width=True)
+        # Action row
+        action_col, paste_col, clear_col = st.columns([1.7, 0.26, 0.84])
+        with action_col:
+            if st.button("启动多智能体会诊", key="submit_expanded", use_container_width=True, type="primary"):
+                _handle_submit(settings)
+        with paste_col:
+            if st.button(
+                " ",
+                key="paste_clipboard",
+                icon=":material/content_paste:",
+                help="从剪贴板粘贴病历",
+                width="stretch",
+                type="tertiary",
+            ):
+                paste_clipboard_into_input()
+        with clear_col:
+            if st.button("清空输入", key="clear_input"):
+                for k in [
+                    "input_main", "input_chief", "input_age",
+                    "input_sex", "input_insurance",
+                ]:
+                    st.session_state[k] = "" if k != "input_sex" else SEX_OPTIONS[0]
+                st.session_state["input_dept"] = settings.default_department
+                st.session_state["input_style"] = OUTPUT_STYLES[0]
+                st.session_state["input_urgency"] = URGENCY_OPTIONS[0]
+                st.rerun()
 
-    if not submitted:
-        return CaseSubmission.empty()
 
-    image_names = [file.name for file in multimodal_images or []]
-    doc_names = [file.name for file in multimodal_docs or []]
-    return CaseSubmission(
-        department=department,
+def _handle_submit(settings: SystemSettings) -> None:
+    """Process the case submission."""
+    main_text = st.session_state.get("input_main", "").strip()
+    if not main_text:
+        st.warning("请先输入病例摘要。")
+        return
+
+    # Try to parse the EHR text for prefill
+    prefill = parse_ehr_intake(main_text, settings.default_department)
+
+    chief = st.session_state.get("input_chief", "") or prefill.chief_complaint or ""
+    age = st.session_state.get("input_age", "") or prefill.patient_age or ""
+    sex = st.session_state.get("input_sex", SEX_OPTIONS[0])
+    if prefill.patient_sex:
+        sex = prefill.patient_sex
+    insurance = st.session_state.get("input_insurance", INSURANCE_OPTIONS[0])
+    if prefill.insurance_type:
+        insurance = prefill.insurance_type
+    dept = st.session_state.get("input_dept", settings.default_department)
+    if prefill.department:
+        dept = prefill.department
+    output_style = st.session_state.get("input_style", OUTPUT_STYLES[0])
+    if prefill.output_style:
+        output_style = prefill.output_style
+    urgency = st.session_state.get("input_urgency", URGENCY_OPTIONS[0])
+    if prefill.urgency:
+        urgency = prefill.urgency
+
+    # Build submission
+    images = st.session_state.get("input_images", []) or []
+    docs = st.session_state.get("input_docs", []) or []
+    image_names = [f.name for f in images]
+    doc_names = [f.name for f in docs]
+
+    submission = CaseSubmission(
+        department=dept,
         output_style=output_style,
         urgency=urgency,
-        chief_complaint=chief_complaint,
-        case_summary=case_summary,
+        chief_complaint=chief,
+        case_summary=main_text,
         patient_age=age,
         patient_sex=sex,
         insurance_type=insurance,
         uploaded_images=image_names,
         uploaded_docs=doc_names,
-        show_process=show_process,
+        show_process=settings.show_diagnostics,
     )
 
+    # Add user message to conversation
+    add_user_message(
+        content=main_text,
+        department=dept,
+        chief_complaint=chief,
+        patient_age=age,
+        patient_sex=sex,
+        insurance=insurance,
+        output_style=output_style,
+        urgency=urgency,
+    )
 
-def render_case_input(show_title: bool = True) -> None:
-    if show_title:
-        st.subheader("病例接诊")
-    settings = st.session_state.settings
-    sync_case_widget_defaults(settings)
-    render_ehr_autofill_panel(settings)
-    submission = collect_submission()
-    if not submission.is_ready:
-        if show_title:
-            st.info("请先录入病例信息，再启动多智能体会诊。")
-        return
-
+    # Run the multi-agent engine
     result = run_multiagent_case(
         submission=submission,
         profile=st.session_state.profile,
         settings=settings,
     )
-    st.session_state.last_result = result
+
+    # Add assistant message
+    add_assistant_message(result)
+
+    # Save to history
     history_item = QueryHistoryItem.from_result(submission, result)
     st.session_state.history = [history_item] + st.session_state.history
     save_history(st.session_state.history)
 
+    # Clear input
+    st.session_state["input_main"] = ""
+    st.session_state.active_view = "Control Room"
+    st.session_state.history_focus = None
+    st.rerun()
 
-def render_output_panel(show_title: bool = True) -> None:
-    result = st.session_state.last_result
-    if not result:
+
+# ── Empty state ────────────────────────────────────────────────────────────────
+
+def render_workspace_summary() -> None:
+    settings: SystemSettings = st.session_state.settings
+    result = latest_result()
+    history = st.session_state.history
+    focus_index = st.session_state.get("history_focus")
+    enabled_providers = sum(1 for p in settings.api_providers if p.enabled)
+    total_agents = sum(r.agent_count for r in settings.agent_roles)
+    latest_status = f"{result.consensus_score:.0%} 一致性" if result else "等待首个病例"
+    latest_copy = result.title if result else "提交病例后即可在这里查看本次会诊输出与过程诊断。"
+
+    cards = [
+        ("默认科室", lbl(settings.default_department, DEPT_LABELS), "新病例将默认进入该工作流。"),
+        (
+            "编排方式",
+            f"{lbl(settings.orchestration_mode, TOPOLOGY_LABELS)} · {total_agents} agents",
+            f"{enabled_providers} 个接口当前可用。",
+        ),
+        ("当前状态", latest_status, latest_copy),
+    ]
+
+    cols = st.columns(3)
+    for col, (label, value, copy) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f"""
+                <div class="workspace-summary-card">
+                    <div class="workspace-summary-label">{escape(label)}</div>
+                    <div class="workspace-summary-value">{escape(value)}</div>
+                    <div class="workspace-summary-copy">{escape(copy)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    if focus_index is not None and 0 <= focus_index < len(history):
+        item = history[focus_index]
         st.markdown(
-            """
-            <div class="glass-card result-placeholder">
-                <h3>一致性输出结果</h3>
-                <p>系统收敛后的诊断建议或治疗方案将在这里展示。</p>
+            f"""
+            <div class="history-highlight-card">
+                <div class="history-highlight-kicker">选中的既往记录</div>
+                <div class="history-highlight-title">{escape(item.title)}</div>
+                <div class="history-highlight-meta">
+                    {escape(item.timestamp)} · {lbl(item.department, DEPT_LABELS)} ·
+                    {lbl(item.output_style, OUTPUT_LABELS)} · {item.consensus_score:.0%} 一致性
+                </div>
+                <div class="history-highlight-copy">{escape(item.summary)}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        return
 
-    if show_title:
-        st.subheader("临床建议")
-    action_col_left, action_col_right = st.columns([1, 0.42])
-    with action_col_right:
-        if result.show_process:
-            toggle_label = "取消固定右侧诊断栏" if st.session_state.diagnostic_pinned else "固定右侧诊断栏"
-            if st.button(toggle_label, use_container_width=True):
-                st.session_state.diagnostic_pinned = not st.session_state.diagnostic_pinned
-                st.rerun()
 
+def render_empty_state() -> None:
+    settings: SystemSettings = st.session_state.settings
+    dept_label = lbl(settings.default_department, DEPT_LABELS)
     st.markdown(
         f"""
-        <div class="result-hero">
-            <div>
-                <div class="result-eyebrow">{ui_label(result.department, DEPARTMENT_LABELS_MAP)} · {ui_label(result.output_style, OUTPUT_STYLE_LABELS_MAP)}</div>
-                <h2>{result.title}</h2>
-                <p>{result.executive_summary}</p>
-            </div>
-            <div class="result-score">
-                <div>一致性</div>
-                <strong>{result.consensus_score:.0%}</strong>
-                <span>{ui_label(result.topology_used, TOPOLOGY_LABELS_MAP)}</span>
+        <div class="empty-state">
+            <div class="empty-state-icon">AI</div>
+            <h2>从这里开始新的罕见病会诊</h2>
+            <p>
+                将病例摘要粘贴到下方工作区。RareMDT 会在中间面板生成临床结论，并在右上角提供多智能体收敛诊断。
+            </p>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:center;margin-top:1.5rem">
+                <span class="quick-chip quick-chip-active">默认科室：{dept_label}</span>
+                <span class="quick-chip">多智能体协同</span>
+                <span class="quick-chip">结果会带编码与费用评估</span>
+                <span class="quick-chip">右上角可展开诊断面板</span>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    tab_summary, tab_code, tab_reference = st.tabs(["结论", "编码与费用", "依据与安全"])
-    with tab_summary:
+
+# ── Result detail (shown below the assistant message card) ───────────────────
+
+def render_result_detail(result) -> None:
+    """Render the full result panel below the assistant card."""
+    tabs = st.tabs(["📋 结论", "🏷 编码与费用", "📖 依据与安全", "🧠 协作诊断"])
+
+    with tabs[0]:
         st.markdown(result.professional_answer)
-    with tab_code:
-        code_col, cost_col = st.columns([1, 1])
-        with code_col:
+
+    with tabs[1]:
+        col_code, col_cost = st.columns(2)
+        with col_code:
             st.markdown("### 编码摘要")
             st.table(result.coding_table)
-        with cost_col:
+        with col_cost:
             st.markdown("### 费用评估")
             st.table(result.cost_table)
-    with tab_reference:
-        st.markdown("### 下一步建议")
+
+    with tabs[2]:
+        st.markdown("#### 下一步建议")
         for step in result.next_steps:
             st.markdown(f"- {step}")
-        st.markdown("### 指南与共识依据")
+
+        st.markdown("#### 指南与共识依据")
         for ref in result.references:
-            st.markdown(f"- **{ref['type']}**：{ref['title']}（{ref['region']}）")
-        st.markdown("### 安全提示")
+            st.markdown(
+                f"- **{escape(ref['type'])}**：{escape(ref['title'])}（{escape(ref['region'])}）"
+            )
+
+        st.markdown("#### 安全提示")
         st.warning(result.safety_note)
 
+    with tabs[3]:
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("一致性", f"{result.consensus_score:.0%}")
+        metric_cols[1].metric("轮次", len(result.rounds))
+        metric_cols[2].metric("角色", len(result.agent_trace))
+        metric_cols[3].metric("拓扑", lbl(result.topology_used, TOPOLOGY_LABELS))
 
-def render_diagnostic_drawer() -> None:
-    result = st.session_state.last_result
-    if not result or not result.show_process:
+        if not result.show_process:
+            st.caption("当前设置未默认展示流程诊断，下列内容为本次运行的内部摘要。")
+
+        st.markdown("#### 收敛轮次")
+        for round_info in result.rounds:
+            st.markdown(
+                f"""
+                <div class="diagnostic-round-card">
+                    <div class="diagnostic-round-head">
+                        <span>第 {int(round_info['round'])} 轮</span>
+                        <span>{float(round_info['alignment']):.0%}</span>
+                    </div>
+                    <div class="diagnostic-round-copy">{escape(str(round_info['summary']))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.progress(float(round_info["alignment"]))
+
+        st.markdown("#### 智能体工位")
+        trace_cols = st.columns(2)
+        for index, trace in enumerate(result.agent_trace):
+            with trace_cols[index % 2]:
+                st.markdown(
+                    f"""
+                    <div class="agent-trace-card">
+                        <div class="agent-trace-title">{escape(lbl(trace['role'], ROLE_LABELS))}</div>
+                        <div class="agent-trace-meta">{escape(lbl(trace['provider'], PROVIDER_LABELS))}</div>
+                        <div class="agent-trace-copy">{escape(trace['note'])}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+
+# ── Control Room ──────────────────────────────────────────────────────────────
+
+def render_control_room() -> None:
+    messages = st.session_state.messages
+    has_messages = bool(messages)
+
+    if has_messages:
+        render_workspace_summary()
+
+    if not has_messages:
+        pad_left, main_col, pad_right = st.columns([1.2, 6.2, 1.2])
+        with main_col:
+            render_input_area()
         return
 
-    rounds_html = "".join(
-        [
-            f"""
-            <div class="drawer-section-card">
-                <div class="drawer-section-head">
-                    <strong>第 {item['round']} 轮</strong>
-                    <span>对齐度 {item['alignment']:.0%}</span>
-                </div>
-                <div>{escape(str(item['summary']))}</div>
-            </div>
-            """
-            for item in result.rounds
-        ]
-    )
-    trace_html = "".join(
-        [
-            f"""
-            <div class="drawer-section-card">
-                <div class="drawer-section-head">
-                    <strong>{escape(ui_label(note['role'], ROLE_TEMPLATE_LABELS_MAP))}</strong>
-                    <span>{escape(ui_label(note['provider'], PROVIDER_LABELS_MAP))}</span>
-                </div>
-                <div>{escape(str(note['note']))}</div>
-            </div>
-            """
-            for note in result.agent_trace
-        ]
-    )
-    pinned_class = " pinned" if st.session_state.diagnostic_pinned else ""
+    pad_left, main_col, pad_right = st.columns([0.45, 8.1, 0.45])
+    with main_col:
+        for msg in messages:
+            role = msg["role"]
+            meta = msg.get("meta", {})
+            ts = meta.get("timestamp", "")
+
+            if role == "user":
+                _render_user_message(msg["content"], meta, ts)
+            elif role == "assistant":
+                _render_assistant_message(msg["content"], meta, ts)
+                with st.container():
+                    render_result_detail(msg["content"])
+
+        render_input_area()
+
+
+# ── Settings view ─────────────────────────────────────────────────────────────
+
+def sync_settings_defaults(s: SystemSettings) -> None:
+    st.session_state.setdefault("st_topology", s.orchestration_mode)
+    st.session_state.setdefault("st_dept", s.default_department)
+    st.session_state.setdefault("st_threshold", float(s.consensus_threshold))
+    st.session_state.setdefault("st_rounds", int(s.max_rounds))
+    st.session_state.setdefault("st_show_diag", bool(s.show_diagnostics))
+    for i, p in enumerate(s.api_providers):
+        st.session_state.setdefault(f"pv_name_{i}", p.provider_name)
+        st.session_state.setdefault(f"pv_model_{i}", p.model_name)
+        st.session_state.setdefault(f"pv_ep_{i}", p.endpoint)
+        st.session_state.setdefault(f"pv_key_{i}", p.api_key)
+        st.session_state.setdefault(f"pv_count_{i}", int(p.agents_for_api))
+        st.session_state.setdefault(f"pv_en_{i}", bool(p.enabled))
+    for i, r in enumerate(s.agent_roles):
+        st.session_state.setdefault(f"rl_name_{i}", r.role_name)
+        st.session_state.setdefault(f"rl_prov_{i}", r.provider_name)
+        st.session_state.setdefault(f"rl_count_{i}", int(r.agent_count))
+        st.session_state.setdefault(f"rl_spec_{i}", r.role_spec)
+
+
+def ensure_choice(key: str, opts: list, fallback: str) -> None:
+    if not opts:
+        return
+    if st.session_state.get(key) not in opts:
+        st.session_state[key] = fallback if fallback in opts else opts[0]
+
+
+def render_page_intro(title: str, copy: str) -> None:
     st.markdown(
         f"""
-        <div class="diagnostic-hover-rail"></div>
-        <aside class="diagnostic-drawer{pinned_class}">
-            <div class="diagnostic-drawer-header">
-                <div>
-                    <div class="diagnostic-drawer-kicker">收敛诊断</div>
-                    <div class="diagnostic-drawer-title">右侧智能体诊断抽屉</div>
-                </div>
-                <div class="diagnostic-drawer-score">{result.consensus_score:.0%}</div>
-            </div>
-            <div class="diagnostic-drawer-body">
-                <div class="drawer-block-title">收敛轮次</div>
-                {rounds_html}
-                <div class="drawer-block-title">智能体轨迹</div>
-                {trace_html}
-            </div>
-        </aside>
+        <div class="page-intro-card">
+            <div class="page-intro-kicker">RareMDT</div>
+            <div class="page-intro-title">{escape(title)}</div>
+            <div class="page-intro-copy">{escape(copy)}</div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_history_view() -> None:
+def render_settings_view(embedded: bool = False) -> None:
+    settings: SystemSettings = st.session_state.settings
+    sync_settings_defaults(settings)
+    ensure_choice("st_topology", TOPOLOGIES, settings.orchestration_mode)
+    ensure_choice("st_dept", DEPARTMENTS, settings.default_department)
+
+    if not embedded:
+        render_page_intro("系统设置", "在这里调整多智能体编排、接口配置和角色工位。")
+
+    # Top section
+    with st.container():
+        c1, c2, c3, c4 = st.columns([1.2, 1, 1, 1])
+        with c1:
+            st.selectbox(
+                "编排模式",
+                TOPOLOGIES,
+                key="st_topology",
+                format_func=lambda x: lbl(x, TOPOLOGY_LABELS),
+            )
+        with c2:
+            st.selectbox(
+                "默认科室",
+                DEPARTMENTS,
+                key="st_dept",
+                format_func=lambda x: lbl(x, DEPT_LABELS),
+            )
+        with c3:
+            st.slider("一致性阈值", 0.5, 0.99, 0.01, key="st_threshold")
+        with c4:
+            st.slider("最大收敛轮次", 1, 6, 1, key="st_rounds")
+        st.toggle("默认显示收敛诊断", key="st_show_diag")
+
+    st.markdown("---")
+
+    # API Providers
+    st.markdown("### API 接口配置")
+    providers = []
+    for i in range(len(settings.api_providers)):
+        ensure_choice(f"pv_name_{i}", list(PROVIDER_PRESETS.keys()),
+                      settings.api_providers[i].provider_name)
+        with st.container():
+            r1, r2, r3, r4 = st.columns([1.2, 1.2, 1.2, 0.8])
+            with r1:
+                pv = st.selectbox(
+                    "供应商",
+                    list(PROVIDER_PRESETS.keys()),
+                    key=f"pv_name_{i}",
+                    format_func=lambda x: lbl(x, PROVIDER_LABELS),
+                )
+            with r2:
+                st.text_input("模型", key=f"pv_model_{i}", placeholder="e.g. deepseek-chat")
+            with r3:
+                ep = st.text_input("接口地址", key=f"pv_ep_{i}")
+                if not ep and st.button("填充", key=f"pv_fill_{i}", use_container_width=True):
+                    st.session_state[f"pv_ep_{i}"] = PROVIDER_PRESETS.get(pv, "")
+            with r4:
+                st.text_input("密钥", type="password", key=f"pv_key_{i}")
+            r5, r6 = st.columns([1, 0.4])
+            with r5:
+                st.number_input("分配智能体数", 0, 12, key=f"pv_count_{i}")
+            with r6:
+                st.toggle("启用", key=f"pv_en_{i}")
+
+        providers.append(
+            APIProviderConfig(
+                provider_name=pv,
+                model_name=st.session_state.get(f"pv_model_{i}", ""),
+                endpoint=st.session_state.get(f"pv_ep_{i}", ""),
+                api_key=st.session_state.get(f"pv_key_{i}", ""),
+                agents_for_api=int(st.session_state.get(f"pv_count_{i}", 0)),
+                enabled=bool(st.session_state.get(f"pv_en_{i}", True)),
+            )
+        )
+
+    pv_c1, pv_c2 = st.columns(2)
+    if pv_c1.button("+ 新增接口", use_container_width=True):
+        settings.api_providers.append(APIProviderConfig())
+        i = len(settings.api_providers) - 1
+        st.session_state[f"pv_name_{i}"] = "DeepSeek"
+        st.session_state[f"pv_model_{i}"] = "deepseek-chat"
+        st.rerun()
+    if pv_c2.button("- 删除最后一个", use_container_width=True):
+        if settings.api_providers:
+            i = len(settings.api_providers) - 1
+            for k in [f"pv_name_{i}", f"pv_model_{i}", f"pv_ep_{i}", f"pv_key_{i}", f"pv_count_{i}", f"pv_en_{i}"]:
+                st.session_state.pop(k, None)
+            settings.api_providers.pop()
+            st.rerun()
+
+    st.markdown("---")
+
+    # Agent roles
+    st.markdown("### 智能体角色工位")
+    pv_names = [p.provider_name for p in providers] or ["DeepSeek"]
+    roles = []
+    for i in range(len(settings.agent_roles)):
+        ensure_choice(f"rl_name_{i}", ROLE_TEMPLATES, settings.agent_roles[i].role_name)
+        ensure_choice(f"rl_prov_{i}", pv_names, settings.agent_roles[i].provider_name)
+        with st.container():
+            rr1, rr2, rr3 = st.columns([1.2, 1.0, 0.8])
+            with rr1:
+                rn = st.selectbox(
+                    "角色",
+                    ROLE_TEMPLATES,
+                    key=f"rl_name_{i}",
+                    format_func=lambda x: lbl(x, ROLE_LABELS),
+                )
+            with rr2:
+                rp = st.selectbox(
+                    "绑定接口",
+                    pv_names,
+                    key=f"rl_prov_{i}",
+                    format_func=lambda x: lbl(x, PROVIDER_LABELS),
+                )
+            with rr3:
+                st.number_input("数量", 1, 12, key=f"rl_count_{i}")
+            st.text_area("角色说明", key=f"rl_spec_{i}", height=90)
+
+        roles.append(
+            AgentRoleConfig(
+                role_name=rn,
+                role_spec=st.session_state.get(f"rl_spec_{i}", ""),
+                provider_name=rp,
+                agent_count=int(st.session_state.get(f"rl_count_{i}", 1)),
+            )
+        )
+
+    rl_c1, rl_c2 = st.columns(2)
+    if rl_c1.button("+ 新增角色", use_container_width=True):
+        prov = providers[0].provider_name if providers else "DeepSeek"
+        settings.agent_roles.append(AgentRoleConfig(provider_name=prov))
+        i = len(settings.agent_roles) - 1
+        st.session_state[f"rl_name_{i}"] = "Orchestrator"
+        st.session_state[f"rl_prov_{i}"] = prov
+        st.session_state[f"rl_count_{i}"] = 1
+        st.rerun()
+    if rl_c2.button("- 删除最后一个", use_container_width=True):
+        if settings.agent_roles:
+            i = len(settings.agent_roles) - 1
+            for k in [f"rl_name_{i}", f"rl_prov_{i}", f"rl_count_{i}", f"rl_spec_{i}"]:
+                st.session_state.pop(k, None)
+            settings.agent_roles.pop()
+            st.rerun()
+
+    st.markdown("---")
+
+    # Save
+    sc1, sc2 = st.columns([1, 1])
+    with sc1:
+        if st.button("保存设置", use_container_width=True):
+            st.session_state.settings = SystemSettings(
+                orchestration_mode=st.session_state.get("st_topology", settings.orchestration_mode),
+                default_department=st.session_state.get("st_dept", settings.default_department),
+                consensus_threshold=float(st.session_state.get("st_threshold", settings.consensus_threshold)),
+                max_rounds=int(st.session_state.get("st_rounds", settings.max_rounds)),
+                show_diagnostics=bool(st.session_state.get("st_show_diag", settings.show_diagnostics)),
+                api_providers=providers,
+                agent_roles=roles,
+            )
+            save_settings(st.session_state.settings)
+            st.success("系统设置已保存。")
+    with sc2:
+        if st.button("重新载入", use_container_width=True):
+            st.session_state.settings = load_settings()
+            st.rerun()
+
+# ── Profile view ──────────────────────────────────────────────────────────────
+
+def render_profile_view(embedded: bool = False) -> None:
+    profile: AppProfile = st.session_state.profile
+    if not embedded:
+        render_page_intro("医生档案", "维护当前账号的基础资料，帮助系统更贴近真实医院场景。")
+
+    with st.container():
+        r1, r2 = st.columns([1, 1])
+        st.text_input("医生姓名", profile.user_name, key="pf_name")
+        st.text_input("职称", profile.title, key="pf_title")
+        r3, r4 = st.columns([1, 1])
+        st.text_input("医院名称", profile.hospital_name, key="pf_hospital")
+        st.selectbox(
+            "所属科室",
+            DEPARTMENTS,
+            index=DEPARTMENTS.index(profile.department),
+            key="pf_dept",
+            format_func=lambda x: lbl(x, DEPT_LABELS),
+        )
+        r5, r6 = st.columns([1, 1])
+        st.text_input("专业方向", profile.specialty_focus, key="pf_specialty")
+        st.text_input("地区", profile.locale, key="pf_locale")
+        st.text_area("服务人群 / 备注", profile.patient_population, key="pf_pop", height=100)
+
+    if st.button("保存档案", use_container_width=True):
+        st.session_state.profile = AppProfile(
+            user_name=st.session_state.get("pf_name", profile.user_name),
+            title=st.session_state.get("pf_title", profile.title),
+            hospital_name=st.session_state.get("pf_hospital", profile.hospital_name),
+            department=st.session_state.get("pf_dept", profile.department),
+            specialty_focus=st.session_state.get("pf_specialty", profile.specialty_focus),
+            locale=st.session_state.get("pf_locale", profile.locale),
+            patient_population=st.session_state.get("pf_pop", profile.patient_population),
+            first_run_complete=True,
+        )
+        save_profile(st.session_state.profile)
+        st.success("档案已保存。")
+
+# ── History view ──────────────────────────────────────────────────────────────
+
+def render_history_view(embedded: bool = False) -> None:
     history = st.session_state.history
+    focus_index = st.session_state.get("history_focus")
+    if not embedded:
+        render_page_intro("历史记录", "左侧侧栏显示最近会诊，这里提供完整列表与重点回看。")
+
     if not history:
-        st.info("暂时还没有历史查询记录。")
+        st.info("暂无历史查询记录。")
         return
 
-    for item in history:
-        with st.container(border=True):
-            st.markdown(f"**{item.title}**")
-            st.caption(
-                f"{item.timestamp} · {ui_label(item.department, DEPARTMENT_LABELS_MAP)} · {ui_label(item.output_style, OUTPUT_STYLE_LABELS_MAP)}"
-            )
-            st.markdown(item.summary)
-            st.markdown(f"一致性：`{item.consensus_score:.0%}`")
+    if focus_index is not None and 0 <= focus_index < len(history):
+        item = history[focus_index]
+        st.markdown(
+            f"""
+            <div class="history-highlight-card">
+                <div class="history-highlight-kicker">最近选中的记录</div>
+                <div class="history-highlight-title">{escape(item.title)}</div>
+                <div class="history-highlight-meta">
+                    {escape(item.timestamp)} · {lbl(item.department, DEPT_LABELS)} ·
+                    {lbl(item.output_style, OUTPUT_LABELS)} · {item.consensus_score:.0%} 一致性
+                </div>
+                <div class="history-highlight-copy">{escape(item.summary)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    for idx, item in enumerate(history):
+        with st.container():
+            cols = st.columns([1, 0.2, 0.3])
+            with cols[0]:
+                st.markdown(
+                    f"**{escape(item.title)}**"
+                    f"<br><span style='font-size:0.75rem;color:var(--text-tertiary)'>"
+                    f"{item.timestamp} · {lbl(item.department, DEPT_LABELS)} · "
+                    f"{lbl(item.output_style, OUTPUT_LABELS)}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f"<span style='font-size:0.8rem;color:var(--text-secondary)'>{escape(item.summary)}</span>", unsafe_allow_html=True)
+            with cols[1]:
+                consensus_color = (
+                    "var(--green)" if item.consensus_score >= 0.85
+                    else "var(--accent)" if item.consensus_score >= 0.70
+                    else "var(--red)"
+                )
+                st.markdown(
+                    f"<div style='text-align:center'><div style='font-size:1.2rem;font-weight:700;color:{consensus_color}'>{item.consensus_score:.0%}</div><div style='font-size:0.65rem;color:var(--text-tertiary)'>一致性</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with cols[2]:
+                if st.button("工作台", key=f"hist_rerun_{idx}", help="返回工作台", use_container_width=True):
+                    open_view("Control Room")
+                    st.rerun()
+
+        st.markdown("---")
+
+def render_settings_workspace() -> None:
+    pad_left, main_col, pad_right = st.columns([0.85, 7.3, 0.85])
+    with main_col:
+        render_page_intro("系统与档案", "医生档案、系统设置和历史记录都在这里统一查看与编辑。")
+
+        st.radio(
+            "设置工作区",
+            SETTINGS_SECTIONS,
+            key="settings_workspace_section",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        section = st.session_state.get("settings_workspace_section", SETTINGS_SECTIONS[0])
+        if section == "医生档案":
+            render_profile_view(embedded=True)
+        elif section == "系统设置":
+            render_settings_view(embedded=True)
+        else:
+            render_history_view(embedded=True)
 
 
-def render_control_room() -> None:
-    compact_mode = should_use_compact_chrome("Control Room")
-    if not compact_mode:
-        render_header()
+# ── First-run guard ───────────────────────────────────────────────────────────
 
-    input_height = 430 if compact_mode else 390
-    output_height = 360 if st.session_state.last_result else 180
-
-    with st.container(height=input_height, border=False):
-        render_case_input(show_title=not compact_mode)
-
-    with st.container(height=output_height, border=False):
-        render_output_panel(show_title=not compact_mode)
-
-    render_diagnostic_drawer()
-
-
-def bootstrap_first_run() -> None:
-    profile = st.session_state.profile
+def first_run_guard() -> None:
+    profile: AppProfile = st.session_state.profile
     if profile.first_run_complete:
         return
-    render_page_banner("Profile")
-    st.info("请先完成首次使用档案设置，以便系统匹配医院部署场景。")
-    render_profile_view()
+
+    open_settings_workspace("医生档案")
+    st.markdown(
+        """
+        <div class="empty-state">
+            <div class="empty-state-icon">✦</div>
+            <h2>欢迎使用 RareMDT</h2>
+            <p>请先完成医生档案设置，以便系统匹配医院部署场景。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    render_settings_workspace()
     st.stop()
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main() -> None:
     st.set_page_config(
-        page_title="港大医院罕见病多智能体诊疗系统",
-        page_icon="M",
+        page_title="RareMDT · 罕见病多智能体诊疗",
+        page_icon="✦",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     inject_css()
     init_state()
     render_sidebar()
-    bootstrap_first_run()
-
-    active_view = st.session_state.active_view
-    if should_use_compact_chrome(active_view):
-        render_corner_heading(active_view)
+    first_run_guard()
+    render_topbar()
+    if st.session_state.active_view == "Settings":
+        render_settings_workspace()
     else:
-        render_page_banner(active_view)
-    if active_view == "Control Room":
         render_control_room()
-    elif active_view == "Settings":
-        render_settings_view()
-    elif active_view == "Profile":
-        render_profile_view()
-    else:
-        render_history_view()
-
-    st.markdown(
-        """
-        <div class="footer-note">
-            当前为演示版本。若用于医院正式部署，请接入合规数据源、经过验证的模型接口、
-            审计日志、权限控制与临床医生签署流程。
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_sidebar_rail()
 
 
 if __name__ == "__main__":
