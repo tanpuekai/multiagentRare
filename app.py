@@ -38,6 +38,11 @@ HISTORY_PATH = DATA_DIR / "history.json"
 
 WORKSPACE_VIEWS = ["Control Room", "Settings", "Profile", "History"]
 SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录"]
+SETTINGS_MENU = [
+    ("账户", "医生档案", ":material/manage_accounts:", "管理当前医生档案与账户资料。"),
+    ("API / 智能体", "系统设置", ":material/hub:", "配置接口、模型和多智能体工位。"),
+    ("历史记录", "历史记录", ":material/history:", "回看既往病例与会诊记录。"),
+]
 DEPARTMENTS = [item.value for item in DepartmentOption]
 TOPOLOGIES = [mode.value for mode in OrchestrationMode]
 OUTPUT_STYLES = ["Diagnostic", "Surgical / Treatment Plan"]
@@ -125,6 +130,23 @@ PROVIDER_PRESETS = {
     "Custom / Hospital Gateway": "",
 }
 ROLE_TEMPLATES = list(ROLE_LABELS.keys())
+SETTINGS_SECTION_META = {
+    "医生档案": {
+        "nav_label": "账户",
+        "title": "账户设置",
+        "copy": "维护医生档案、所属医院与专业方向，让会诊结果更贴近真实部署场景。",
+    },
+    "系统设置": {
+        "nav_label": "API / 智能体",
+        "title": "API 与智能体配置",
+        "copy": "集中管理模型接口、编排拓扑、角色工位与默认会诊参数。",
+    },
+    "历史记录": {
+        "nav_label": "历史记录",
+        "title": "会诊历史",
+        "copy": "查看既往诊疗记录与一致性摘要，支持快速回到工作区继续处理。",
+    },
+}
 
 PROFILE_MIGRATIONS = {
     "Dr. Demo": "演示医生",
@@ -273,6 +295,10 @@ def open_settings_workspace(section: str = SETTINGS_SECTIONS[0]) -> None:
     st.session_state.active_view = "Settings"
     if section in SETTINGS_SECTIONS:
         st.session_state.settings_workspace_section = section
+
+
+def close_settings_workspace() -> None:
+    open_view("Control Room")
 
 
 def focus_history_item(index: int) -> None:
@@ -532,19 +558,21 @@ def render_sidebar() -> None:
             unsafe_allow_html=True,
         )
 
-        with st.expander("⚙ 系统设置", expanded=False):
-            st.markdown('<div class="sidebar-section-label">系统设置</div>', unsafe_allow_html=True)
-            render_sidebar_settings_panel()
-            if st.button("在主区域打开系统设置", key="sidebar_open_settings_main", use_container_width=True):
-                open_settings_workspace("系统设置")
-                st.rerun()
-
-            st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="sidebar-section-label">医生档案</div>', unsafe_allow_html=True)
-            render_sidebar_profile_panel()
-            if st.button("在主区域打开医生档案", key="sidebar_open_profile_main", use_container_width=True):
-                open_settings_workspace("医生档案")
-                st.rerun()
+        with st.popover("⚙ 系统设置", use_container_width=True):
+            st.markdown(
+                """
+                <div class="settings-menu-card">
+                    <div class="settings-menu-title">设置中心</div>
+                    <div class="settings-menu-copy">从这里进入账户、API / 智能体与历史记录页面。</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            for label, section, icon, copy in SETTINGS_MENU:
+                if st.button(label, key=f"sidebar_settings_menu_{section}", icon=icon, use_container_width=True):
+                    open_settings_workspace(section)
+                    st.rerun()
+                st.caption(copy)
 
         st.markdown(
             f"""
@@ -562,23 +590,15 @@ def render_sidebar() -> None:
 def render_topbar() -> None:
     result = latest_result()
     active_view = st.session_state.active_view
-    spacer_col, primary_action_col, diagnostics_col = st.columns(
-        [6.3, 1.0, 1.05],
+    if active_view != "Control Room":
+        return
+    spacer_col, diagnostics_col = st.columns(
+        [7.3, 1.05],
         gap="small",
     )
 
     with spacer_col:
         st.empty()
-
-    with primary_action_col:
-        if active_view == "Control Room":
-            if st.button("清空重置", key="topbar_new_case", use_container_width=True):
-                reset_workspace()
-                st.rerun()
-        else:
-            if st.button("返回工作台", key="topbar_back_workspace", use_container_width=True):
-                open_view("Control Room")
-                st.rerun()
 
     with diagnostics_col:
         with st.popover("诊断面板", use_container_width=True):
@@ -765,40 +785,37 @@ def render_input_area() -> None:
     """Primary composer surface for new case submission."""
     settings: SystemSettings = st.session_state.settings
     with st.container(border=True):
-        st.markdown(
-            """
-            <div class="composer-head">
-                <div class="composer-head-copy">
-                    <div class="composer-eyebrow">RareMDT Intake</div>
-                    <div class="composer-title">病例输入区</div>
-                    <div class="composer-copy">粘贴病历摘要，系统会自动预填结构化字段并启动多智能体会诊。</div>
+        head_col, toggle_col, reset_col = st.columns([0.64, 0.2, 0.16], vertical_alignment="center")
+        with head_col:
+            st.markdown(
+                """
+                <div class="composer-head">
+                    <div class="composer-head-copy">
+                        <div class="composer-eyebrow">RareMDT Intake</div>
+                        <div class="composer-title">病例输入区</div>
+                    </div>
                 </div>
-                <div class="composer-head-badge">结构化解析 + 协作诊断</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        enabled_providers = sum(1 for p in settings.api_providers if p.enabled)
-        total_agents = sum(r.agent_count for r in settings.agent_roles)
-        st.markdown(
-            f"""
-            <div class="stats-strip">
-                <div class="stat-pill">
-                    <div class="stat-pill-dot"></div>
-                    {enabled_providers} 接口已配置
-                </div>
-                <div class="stat-pill">
-                    <div class="stat-pill-dot"></div>
-                    {total_agents} 智能体就绪
-                </div>
-                <div class="stat-pill">
-                    <div class="stat-pill-dot stat-pill-dot-warning"></div>
-                    演示模式 · 模拟输出
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+                """,
+                unsafe_allow_html=True,
+            )
+        with reset_col:
+            if st.button(
+                " ",
+                key="reset_workspace_icon",
+                icon=":material/restart_alt:",
+                help="清空重置",
+                width="stretch",
+                type="tertiary",
+            ):
+                reset_workspace()
+                st.rerun()
+        with toggle_col:
+            st.toggle(
+                "高级模式",
+                key="input_expanded",
+                value=st.session_state.get("input_expanded", False),
+                label_visibility="visible",
+            )
 
         if st.session_state.get("input_expanded", False):
             _render_expanded_input(settings)
@@ -818,100 +835,46 @@ def _render_compact_input(settings: SystemSettings) -> None:
     st.session_state.setdefault("input_age", "")
     st.session_state.setdefault("input_chief", "")
 
-    # Expand toggle (checkbox return value IS the state — no manual assignment needed)
-    with st.container():
-        actions_col, toggle_col = st.columns([0.8, 0.2])
-        with actions_col:
-            st.markdown(
-                """
-                <div class="quick-actions">
-                    <span class="quick-chip quick-chip-active">快速录入</span>
-                    <span class="quick-chip">科室：""" + lbl(settings.default_department, DEPT_LABELS) + """</span>
-                    <span class="quick-chip">""" + lbl(OUTPUT_STYLES[0], OUTPUT_LABELS) + """</span>
-                    <span class="quick-chip">""" + lbl(URGENCY_OPTIONS[0], URGENCY_LABELS) + """</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with toggle_col:
-            expanded = st.toggle(
-                "高级模式",
-                key="input_expanded",
-                value=st.session_state.get("input_expanded", False),
-                label_visibility="visible",
-            )
+    st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
+    st.text_area(
+        "病例摘要",
+        key="input_main",
+        height=96,
+        placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
+        label_visibility="collapsed",
+    )
 
-        st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
-        st.text_area(
-            "病例摘要",
-            key="input_main",
-            height=96,
-            placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…",
+    st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
+    img_col, doc_col, paste_col, send_col = st.columns([1.1, 1.1, 0.24, 0.92])
+    with img_col:
+        st.file_uploader(
+            "影像",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="input_images",
+            accept_multiple_files=True,
             label_visibility="collapsed",
         )
-
-        if expanded:
-            st.markdown('<div class="composer-section-label">快速补充信息</div>', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns([1.2, 0.8, 1.0])
-            with c1:
-                st.text_input("主诉", key="input_chief", placeholder="主要症状")
-            with c2:
-                st.text_input("年龄", key="input_age", placeholder="e.g. 3岁")
-            with c3:
-                st.selectbox(
-                    "医保",
-                    INSURANCE_OPTIONS,
-                    key="input_insurance",
-                    format_func=lambda x: lbl(x, INSURANCE_LABELS),
-                )
-            c4, c5 = st.columns([1.2, 1.0])
-            with c4:
-                st.selectbox(
-                    "科室",
-                    DEPARTMENTS,
-                    key="input_dept",
-                    format_func=lambda x: lbl(x, DEPT_LABELS),
-                )
-            with c5:
-                st.radio(
-                    "输出模式",
-                    OUTPUT_STYLES,
-                    key="input_style",
-                    format_func=lambda x: lbl(x, OUTPUT_LABELS),
-                    horizontal=True,
-                )
-
-        st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
-        img_col, doc_col, paste_col, send_col = st.columns([1.1, 1.1, 0.24, 0.92])
-        with img_col:
-            st.file_uploader(
-                "影像",
-                type=["png", "jpg", "jpeg", "webp"],
-                key="input_images",
-                accept_multiple_files=True,
-                label_visibility="collapsed",
-            )
-        with doc_col:
-            st.file_uploader(
-                "文档",
-                type=["pdf", "txt", "docx"],
-                key="input_docs",
-                accept_multiple_files=True,
-                label_visibility="collapsed",
-            )
-        with paste_col:
-            if st.button(
-                " ",
-                key="paste_clipboard_compact",
-                icon=":material/content_paste:",
-                help="从剪贴板粘贴病历",
-                width="stretch",
-                type="tertiary",
-            ):
-                paste_clipboard_into_input()
-        with send_col:
-            if st.button("启动会诊", key="send_btn", help="启动多智能体会诊", use_container_width=True, type="primary"):
-                _handle_submit(settings)
+    with doc_col:
+        st.file_uploader(
+            "文档",
+            type=["pdf", "txt", "docx"],
+            key="input_docs",
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+        )
+    with paste_col:
+        if st.button(
+            " ",
+            key="paste_clipboard_compact",
+            icon=":material/content_paste:",
+            help="从剪贴板粘贴病历",
+            width="stretch",
+            type="tertiary",
+        ):
+            paste_clipboard_into_input()
+    with send_col:
+        if st.button("启动会诊", key="send_btn", help="启动多智能体会诊", use_container_width=True, type="primary"):
+            _handle_submit(settings)
 
 
 def _render_expanded_input(settings: SystemSettings) -> None:
@@ -930,17 +893,6 @@ def _render_expanded_input(settings: SystemSettings) -> None:
         st.session_state.setdefault(key, val)
 
     with st.container():
-        st.markdown(
-            """
-            <div class="quick-actions">
-                <span class="quick-chip quick-chip-active">完整表单模式</span>
-                <span class="quick-chip">支持上传影像与文档</span>
-                <span class="quick-chip">支持自动解析病历</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
         st.markdown('<div class="composer-section-label">病例摘要</div>', unsafe_allow_html=True)
         st.text_area(
             "病例摘要",
@@ -1281,18 +1233,7 @@ def render_result_detail(result) -> None:
 
 def render_control_room() -> None:
     messages = st.session_state.messages
-    has_messages = bool(messages)
-
-    if has_messages:
-        render_workspace_summary()
-
-    if not has_messages:
-        pad_left, main_col, pad_right = st.columns([1.2, 6.2, 1.2])
-        with main_col:
-            render_input_area()
-        return
-
-    pad_left, main_col, pad_right = st.columns([0.45, 8.1, 0.45])
+    pad_left, main_col, pad_right = st.columns([0.8, 7.0, 0.8])
     with main_col:
         for msg in messages:
             role = msg["role"]
@@ -1306,6 +1247,7 @@ def render_control_room() -> None:
                 with st.container():
                     render_result_detail(msg["content"])
 
+        st.markdown('<div class="dialog-composer-buffer"></div>', unsafe_allow_html=True)
         render_input_area()
 
 
@@ -1615,22 +1557,44 @@ def render_history_view(embedded: bool = False) -> None:
         st.markdown("---")
 
 def render_settings_workspace() -> None:
-    pad_left, main_col, pad_right = st.columns([0.85, 7.3, 0.85])
+    current_section = st.session_state.get("settings_workspace_section", SETTINGS_SECTIONS[0])
+    meta = SETTINGS_SECTION_META[current_section]
+
+    pad_left, main_col, pad_right = st.columns([0.7, 7.6, 0.7])
     with main_col:
-        render_page_intro("系统与档案", "医生档案、系统设置和历史记录都在这里统一查看与编辑。")
+        head_col, close_col = st.columns([4.8, 1.1], vertical_alignment="center")
+        with head_col:
+            st.markdown(
+                f"""
+                <div class="settings-shell-card">
+                    <div class="settings-shell-kicker">Settings</div>
+                    <div class="settings-shell-title">{escape(meta['title'])}</div>
+                    <div class="settings-shell-copy">{escape(meta['copy'])}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with close_col:
+            if st.button("关闭设置", key="settings_close_button", use_container_width=True):
+                close_settings_workspace()
+                st.rerun()
 
-        st.radio(
-            "设置工作区",
-            SETTINGS_SECTIONS,
-            key="settings_workspace_section",
-            horizontal=True,
-            label_visibility="collapsed",
-        )
+        nav_cols = st.columns(3)
+        for nav_col, (label, section, icon, _) in zip(nav_cols, SETTINGS_MENU):
+            with nav_col:
+                if st.button(
+                    label,
+                    key=f"settings_nav_{section}",
+                    icon=icon,
+                    type="primary" if current_section == section else "secondary",
+                    use_container_width=True,
+                ):
+                    open_settings_workspace(section)
+                    st.rerun()
 
-        section = st.session_state.get("settings_workspace_section", SETTINGS_SECTIONS[0])
-        if section == "医生档案":
+        if current_section == "医生档案":
             render_profile_view(embedded=True)
-        elif section == "系统设置":
+        elif current_section == "系统设置":
             render_settings_view(embedded=True)
         else:
             render_history_view(embedded=True)

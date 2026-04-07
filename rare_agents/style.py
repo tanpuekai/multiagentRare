@@ -233,6 +233,23 @@ def inject_css() -> None:
                 box-shadow: var(--shadow-sm);
             }
 
+            .settings-menu-card {
+                padding: 0.1rem 0.05rem 0.55rem;
+            }
+
+            .settings-menu-title {
+                font-size: 0.92rem;
+                font-weight: 700;
+                color: var(--text-primary);
+                margin-bottom: 0.18rem;
+            }
+
+            .settings-menu-copy {
+                font-size: 0.79rem;
+                color: var(--text-secondary);
+                line-height: 1.55;
+            }
+
             .sidebar-profile-name {
                 font-size: 0.9rem;
                 font-weight: 700;
@@ -390,6 +407,41 @@ def inject_css() -> None:
                 border-radius: var(--radius-lg);
                 padding: 1rem 1.15rem;
                 margin-bottom: 1rem;
+            }
+
+            .settings-shell-card {
+                border-radius: 26px;
+                padding: 1.15rem 1.2rem;
+                margin-bottom: 0.8rem;
+                background:
+                    radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 34%),
+                    linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,255,0.92));
+                border: 1px solid rgba(224, 232, 243, 0.96);
+                box-shadow: 0 18px 38px rgba(15, 23, 42, 0.07);
+            }
+
+            .settings-shell-kicker {
+                font-size: 0.72rem;
+                font-weight: 700;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--accent);
+                margin-bottom: 0.28rem;
+            }
+
+            .settings-shell-title {
+                font-size: 1.34rem;
+                font-weight: 700;
+                color: var(--text-primary);
+                line-height: 1.15;
+            }
+
+            .settings-shell-copy {
+                margin-top: 0.38rem;
+                font-size: 0.88rem;
+                color: var(--text-secondary);
+                line-height: 1.65;
+                max-width: 660px;
             }
 
             .history-highlight-card {
@@ -599,7 +651,7 @@ def inject_css() -> None:
                 margin: 0;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) {
                 position: relative;
                 overflow: hidden;
                 background:
@@ -612,7 +664,22 @@ def inject_css() -> None:
                 margin: 0 0 1rem !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip)::before {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) {
+                position: fixed !important;
+                left: calc(50% + (var(--sidebar-w) / 2));
+                bottom: 1rem;
+                width: min(940px, calc(100vw - var(--sidebar-w) - 3rem));
+                transform: translateX(-50%);
+                z-index: 95;
+                margin: 0 !important;
+            }
+
+            body.sidebar-collapsed .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) {
+                left: 50%;
+                width: min(940px, calc(100vw - 2.6rem));
+            }
+
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head)::before {
                 content: "";
                 position: absolute;
                 inset: 0 0 auto 0;
@@ -623,23 +690,23 @@ def inject_css() -> None:
                 pointer-events: none;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) > div {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) > div {
                 padding: 0 !important;
                 position: relative;
                 z-index: 1;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip):focus-within {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head):focus-within {
                 border-color: rgba(47, 109, 246, 0.30);
                 box-shadow: var(--shadow-lg), 0 0 0 4px rgba(47, 109, 246, 0.08);
             }
 
             .composer-head {
                 display: flex;
-                align-items: flex-start;
-                justify-content: space-between;
-                gap: 1rem;
-                padding: 1.1rem 1.15rem 0.15rem;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 0.65rem;
+                padding: 0.7rem 0 0.25rem;
             }
 
             .composer-head-copy {
@@ -660,59 +727,6 @@ def inject_css() -> None:
                 font-weight: 700;
                 color: var(--text-primary);
                 line-height: 1.2;
-            }
-
-            .composer-copy {
-                margin-top: 0.35rem;
-                font-size: 0.84rem;
-                color: var(--text-secondary);
-                line-height: 1.6;
-                max-width: 620px;
-            }
-
-            .composer-head-badge {
-                flex-shrink: 0;
-                font-size: 0.74rem;
-                font-weight: 600;
-                color: var(--accent);
-                background: rgba(255, 255, 255, 0.82);
-                border: 1px solid rgba(196, 213, 235, 0.96);
-                border-radius: 999px;
-                padding: 0.45rem 0.75rem;
-                box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-            }
-
-            .stats-strip {
-                display: flex;
-                align-items: center;
-                gap: 0.55rem;
-                flex-wrap: wrap;
-                padding: 0.55rem 1.15rem 0.7rem;
-                border-bottom: 1px solid rgba(214, 224, 238, 0.78);
-            }
-
-            .stat-pill {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.4rem;
-                font-size: 0.74rem;
-                color: var(--text-secondary);
-                background: rgba(255, 255, 255, 0.82);
-                border: 1px solid rgba(214, 224, 238, 0.92);
-                border-radius: 999px;
-                padding: 0.34rem 0.72rem;
-                box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
-            }
-
-            .stat-pill-dot {
-                width: 7px;
-                height: 7px;
-                border-radius: 50%;
-                background: var(--green);
-            }
-
-            .stat-pill-dot-warning {
-                background: var(--accent);
             }
 
             .quick-actions {
@@ -752,6 +766,10 @@ def inject_css() -> None:
                 text-transform: uppercase;
                 color: var(--text-tertiary);
                 margin: 0.35rem 0 0.45rem;
+            }
+
+            .dialog-composer-buffer {
+                height: clamp(18rem, 32vh, 24rem);
             }
 
             .diagnostic-round-card,
@@ -834,11 +852,11 @@ def inject_css() -> None:
                 color: var(--text-tertiary) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) [data-testid="stHorizontalBlock"] > div {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stHorizontalBlock"] > div {
                 gap: 0.75rem;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stTextArea [data-baseweb="textarea"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stTextArea [data-baseweb="textarea"] {
                 background: rgba(249, 251, 255, 0.96) !important;
                 border: 1px solid rgba(213, 223, 238, 0.96) !important;
                 border-radius: 24px !important;
@@ -847,22 +865,22 @@ def inject_css() -> None:
                 transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stTextArea [data-baseweb="textarea"]:focus-within {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stTextArea [data-baseweb="textarea"]:focus-within {
                 background: rgba(255, 255, 255, 0.98) !important;
                 border-color: rgba(47, 109, 246, 0.34) !important;
                 box-shadow: 0 0 0 4px rgba(47, 109, 246, 0.08), inset 0 1px 0 rgba(255,255,255,0.92) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stTextArea textarea {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stTextArea textarea {
                 min-height: 112px !important;
                 max-height: 340px !important;
                 resize: none !important;
                 font-size: 0.95rem !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stTextInput > div > div,
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stNumberInput > div,
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) div[data-baseweb="select"] > div {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stTextInput > div > div,
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stNumberInput > div,
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-baseweb="select"] > div {
                 background: rgba(249, 251, 255, 0.96) !important;
                 border: 1px solid rgba(213, 223, 238, 0.96) !important;
                 border-radius: 16px !important;
@@ -870,8 +888,8 @@ def inject_css() -> None:
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.9) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stTextInput > div > div:focus-within,
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stNumberInput > div:focus-within {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stTextInput > div > div:focus-within,
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stNumberInput > div:focus-within {
                 border-color: rgba(47, 109, 246, 0.34) !important;
                 box-shadow: 0 0 0 3px rgba(47, 109, 246, 0.08), inset 0 1px 0 rgba(255,255,255,0.9) !important;
             }
@@ -930,16 +948,17 @@ def inject_css() -> None:
                 font-size: 0.82rem !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) [data-testid="stToggle"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stToggle"] {
                 background: rgba(255,255,255,0.78);
                 border: 1px solid rgba(213, 223, 238, 0.96);
                 border-radius: 18px;
-                padding: 0.48rem 0.72rem 0.28rem;
-                min-height: 54px;
+                padding: 0.38rem 0.68rem 0.2rem;
+                min-height: 48px;
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.86);
+                margin-top: 0.2rem;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) [data-testid="stToggle"] label {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stToggle"] label {
                 color: var(--text-primary) !important;
                 font-weight: 600 !important;
             }
@@ -966,7 +985,7 @@ def inject_css() -> None:
                 transform: translateY(-1px);
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stButton > button {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button {
                 min-height: 48px !important;
                 border-radius: 16px !important;
                 background: rgba(255, 255, 255, 0.82) !important;
@@ -974,19 +993,19 @@ def inject_css() -> None:
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.86) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stButton > button[kind="primary"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="primary"] {
                 background: linear-gradient(135deg, #1d4ed8, #3b82f6) !important;
                 border-color: transparent !important;
                 color: var(--text-inverse) !important;
                 box-shadow: 0 14px 28px rgba(37, 99, 235, 0.22) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stButton > button[kind="primary"]:hover {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="primary"]:hover {
                 background: linear-gradient(135deg, #1b47c5, #2f6df6) !important;
                 border-color: transparent !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stButton > button[kind="tertiary"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"] {
                 width: 56px !important;
                 min-width: 56px !important;
                 max-width: 56px !important;
@@ -1000,7 +1019,7 @@ def inject_css() -> None:
                 color: var(--accent) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) .stButton > button[kind="tertiary"]:hover {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"]:hover {
                 background: rgba(255, 255, 255, 1) !important;
                 border-color: rgba(47, 109, 246, 0.32) !important;
                 box-shadow: 0 14px 24px rgba(15, 23, 42, 0.08), 0 0 0 3px rgba(47, 109, 246, 0.06) !important;
@@ -1121,7 +1140,7 @@ def inject_css() -> None:
                 border-color: var(--accent) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) [data-testid="stFileUploaderDropzone"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stFileUploaderDropzone"] {
                 min-height: 92px;
                 background: linear-gradient(180deg, rgba(248, 250, 255, 0.98), rgba(241, 245, 251, 0.92)) !important;
                 border: 1px dashed rgba(175, 189, 207, 0.96) !important;
@@ -1130,7 +1149,7 @@ def inject_css() -> None:
                 transition: border-color 140ms ease, background 140ms ease, transform 140ms ease, box-shadow 140ms ease !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.stats-strip) [data-testid="stFileUploaderDropzone"]:hover {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stFileUploaderDropzone"]:hover {
                 background: linear-gradient(180deg, rgba(255,255,255,0.99), rgba(244,248,255,0.96)) !important;
                 border-color: rgba(47, 109, 246, 0.46) !important;
                 box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06) !important;
@@ -1245,6 +1264,12 @@ def inject_css() -> None:
 
                 .stApp [data-testid="stAppViewContainer"] {
                     margin-left: 0 !important;
+                }
+
+                .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) {
+                    left: 50%;
+                    width: calc(100vw - 1.35rem);
+                    bottom: 0.7rem;
                 }
 
                 .workspace-summary-card {
