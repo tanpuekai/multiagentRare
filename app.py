@@ -272,6 +272,28 @@ def clear_input_fields() -> None:
         st.session_state.pop(key, None)
 
 
+def render_attachment_menu() -> None:
+    images = st.session_state.get("input_images", []) or []
+    docs = st.session_state.get("input_docs", []) or []
+    attachment_count = len(images) + len(docs)
+
+    with st.popover(" ", icon=":material/add:", help="添加附件", use_container_width=True):
+        if attachment_count:
+            st.caption(f"已添加 {attachment_count} 个附件")
+        st.file_uploader(
+            "上传影像",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="input_images",
+            accept_multiple_files=True,
+        )
+        st.file_uploader(
+            "上传文档",
+            type=["pdf", "txt", "docx"],
+            key="input_docs",
+            accept_multiple_files=True,
+        )
+
+
 # ── Session state ─────────────────────────────────────────────────────────────
 
 def init_state() -> None:
@@ -804,41 +826,63 @@ def render_input_area() -> None:
         if clipboard_notice:
             st.warning(clipboard_notice)
 
-        head_col, toggle_col, reset_col = st.columns([0.64, 0.2, 0.16], vertical_alignment="center")
-        with head_col:
-            st.markdown(
-                """
-                <div class="composer-head">
-                    <div class="composer-head-copy">
-                        <div class="composer-eyebrow">RareMDT Intake</div>
-                        <div class="composer-title">病例输入区</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with reset_col:
-            st.button(
-                " ",
-                key="reset_workspace_icon",
-                icon=":material/restart_alt:",
-                help="清空重置",
-                width="stretch",
-                type="tertiary",
-                on_click=reset_workspace,
-            )
-        with toggle_col:
-            st.toggle(
-                "高级模式",
-                key="input_expanded",
-                value=st.session_state.get("input_expanded", False),
-                label_visibility="visible",
-            )
+        st.markdown('<div class="composer-head composer-shell-anchor" aria-hidden="true"></div>', unsafe_allow_html=True)
 
         if st.session_state.get("input_expanded", False):
             _render_expanded_input(settings)
         else:
             _render_compact_input(settings)
+
+
+def render_composer_controls(settings: SystemSettings, submit_key: str) -> None:
+    has_input = bool(st.session_state.get("input_main", "").strip())
+    add_col, spacer_col, toggle_col, paste_col, reset_col, send_col = st.columns(
+        [0.18, 1.28, 0.42, 0.18, 0.18, 0.18],
+        vertical_alignment="center",
+    )
+    with add_col:
+        render_attachment_menu()
+    with spacer_col:
+        st.markdown('<div class="composer-controls-spacer"></div>', unsafe_allow_html=True)
+    with toggle_col:
+        st.toggle(
+            "高级模式",
+            key="input_expanded",
+            value=st.session_state.get("input_expanded", False),
+            label_visibility="visible",
+        )
+    with paste_col:
+        st.button(
+            " ",
+            key="paste_clipboard_icon",
+            icon=":material/content_paste:",
+            help="从剪贴板粘贴",
+            width="stretch",
+            type="tertiary",
+            on_click=paste_clipboard_into_input,
+        )
+    with reset_col:
+        st.button(
+            " ",
+            key="reset_workspace_icon",
+            icon=":material/restart_alt:",
+            help="清空重置",
+            width="stretch",
+            type="tertiary",
+            on_click=reset_workspace,
+        )
+    with send_col:
+        st.button(
+            " ",
+            key=submit_key,
+            icon=":material/arrow_upward:",
+            help="启动会诊" if has_input else "请先输入病例摘要",
+            width="stretch",
+            type="primary" if has_input else "tertiary",
+            disabled=not has_input,
+            on_click=_handle_submit,
+            args=(settings,),
+        )
 
 
 def _render_compact_input(settings: SystemSettings) -> None:
@@ -861,37 +905,7 @@ def _render_compact_input(settings: SystemSettings) -> None:
         label_visibility="collapsed",
     )
 
-    st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
-    img_col, doc_col, paste_col, send_col = st.columns([1.1, 1.1, 0.24, 0.92])
-    with img_col:
-        st.file_uploader(
-            "影像",
-            type=["png", "jpg", "jpeg", "webp"],
-            key="input_images",
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-        )
-    with doc_col:
-        st.file_uploader(
-            "文档",
-            type=["pdf", "txt", "docx"],
-            key="input_docs",
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-        )
-    with paste_col:
-        st.button(
-            " ",
-            key="paste_clipboard_compact",
-            icon=":material/content_paste:",
-            help="从剪贴板粘贴病历",
-            width="stretch",
-            type="tertiary",
-            on_click=paste_clipboard_into_input,
-        )
-    with send_col:
-        if st.button("启动会诊", key="send_btn", help="启动多智能体会诊", use_container_width=True, type="primary"):
-            _handle_submit(settings)
+    render_composer_controls(settings, "send_btn")
 
 
 def _render_expanded_input(settings: SystemSettings) -> None:
@@ -967,40 +981,7 @@ def _render_expanded_input(settings: SystemSettings) -> None:
                 horizontal=True,
             )
 
-        st.markdown('<div class="composer-section-label">附件与操作</div>', unsafe_allow_html=True)
-        fu1, fu2 = st.columns(2)
-        with fu1:
-            st.file_uploader(
-                "上传影像 / 照片",
-                type=["png", "jpg", "jpeg", "webp"],
-                key="input_images",
-                accept_multiple_files=True,
-            )
-        with fu2:
-            st.file_uploader(
-                "上传报告 / PDF",
-                type=["pdf", "txt", "docx"],
-                key="input_docs",
-                accept_multiple_files=True,
-            )
-
-        # Action row
-        action_col, paste_col, clear_col = st.columns([1.7, 0.26, 0.84])
-        with action_col:
-            if st.button("启动多智能体会诊", key="submit_expanded", use_container_width=True, type="primary"):
-                _handle_submit(settings)
-        with paste_col:
-            st.button(
-                " ",
-                key="paste_clipboard",
-                icon=":material/content_paste:",
-                help="从剪贴板粘贴病历",
-                width="stretch",
-                type="tertiary",
-                on_click=paste_clipboard_into_input,
-            )
-        with clear_col:
-            st.button("清空输入", key="clear_input", on_click=clear_input_fields)
+        render_composer_controls(settings, "submit_expanded")
 
 
 def _handle_submit(settings: SystemSettings) -> None:

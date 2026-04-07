@@ -702,11 +702,15 @@ def inject_css() -> None:
             }
 
             .composer-head {
-                display: flex;
-                align-items: center;
-                justify-content: flex-start;
-                gap: 0.65rem;
-                padding: 0.7rem 0 0.25rem;
+                display: block;
+                min-height: 0;
+                padding: 0;
+                margin: 0;
+            }
+
+            .composer-shell-anchor {
+                height: 0;
+                overflow: hidden;
             }
 
             .composer-head-copy {
@@ -765,7 +769,11 @@ def inject_css() -> None:
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
                 color: var(--text-tertiary);
-                margin: 0.35rem 0 0.45rem;
+                margin: 0.4rem 0 0.45rem;
+            }
+
+            .composer-controls-spacer {
+                min-height: 1px;
             }
 
             .dialog-composer-buffer {
@@ -952,10 +960,10 @@ def inject_css() -> None:
                 background: rgba(255,255,255,0.78);
                 border: 1px solid rgba(213, 223, 238, 0.96);
                 border-radius: 18px;
-                padding: 0.38rem 0.68rem 0.2rem;
-                min-height: 48px;
+                padding: 0.28rem 0.68rem 0.1rem;
+                min-height: 46px;
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.86);
-                margin-top: 0.2rem;
+                margin-top: 0.05rem;
             }
 
             .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) [data-testid="stToggle"] label {
@@ -985,8 +993,9 @@ def inject_css() -> None:
                 transform: translateY(-1px);
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button {
-                min-height: 48px !important;
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button,
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button {
+                min-height: 46px !important;
                 border-radius: 16px !important;
                 background: rgba(255, 255, 255, 0.82) !important;
                 border: 1px solid rgba(213, 223, 238, 0.96) !important;
@@ -994,18 +1003,26 @@ def inject_css() -> None:
             }
 
             .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="primary"] {
-                background: linear-gradient(135deg, #1d4ed8, #3b82f6) !important;
-                border-color: transparent !important;
-                color: var(--text-inverse) !important;
-                box-shadow: 0 14px 28px rgba(37, 99, 235, 0.22) !important;
+                width: 56px !important;
+                min-width: 56px !important;
+                max-width: 56px !important;
+                min-height: 56px !important;
+                aspect-ratio: 1 / 1;
+                padding: 0 !important;
+                border-radius: 999px !important;
+                background: linear-gradient(180deg, #111827, #0f172a) !important;
+                border: 1px solid rgba(15, 23, 42, 0.92) !important;
+                color: #ffffff !important;
+                box-shadow: 0 16px 30px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255,255,255,0.08) !important;
             }
 
             .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="primary"]:hover {
-                background: linear-gradient(135deg, #1b47c5, #2f6df6) !important;
-                border-color: transparent !important;
+                background: linear-gradient(180deg, #0f172a, #020617) !important;
+                border-color: rgba(15, 23, 42, 0.98) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"] {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"],
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button {
                 width: 56px !important;
                 min-width: 56px !important;
                 max-width: 56px !important;
@@ -1019,10 +1036,20 @@ def inject_css() -> None:
                 color: var(--accent) !important;
             }
 
-            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"]:hover {
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button[kind="tertiary"]:hover,
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button:hover {
                 background: rgba(255, 255, 255, 1) !important;
                 border-color: rgba(47, 109, 246, 0.32) !important;
                 box-shadow: 0 14px 24px rgba(15, 23, 42, 0.08), 0 0 0 3px rgba(47, 109, 246, 0.06) !important;
+            }
+
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button:disabled {
+                opacity: 0.68 !important;
+                background: rgba(245, 247, 251, 0.98) !important;
+                border-color: rgba(213, 223, 238, 0.96) !important;
+                color: rgba(100, 116, 139, 0.7) !important;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.92) !important;
+                transform: none !important;
             }
 
             .stApp [data-testid="stSidebar"] .stButton > button {
