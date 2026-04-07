@@ -272,26 +272,49 @@ def clear_input_fields() -> None:
         st.session_state.pop(key, None)
 
 
-def render_attachment_menu() -> None:
+def toggle_attachment_menu() -> None:
+    st.session_state["attachment_menu_open"] = not st.session_state.get("attachment_menu_open", False)
+
+
+def render_attachment_menu_toggle() -> None:
+    st.button(
+        " ",
+        key="attachment_menu_toggle",
+        icon=":material/add:",
+        help="添加附件",
+        width="stretch",
+        type="tertiary",
+        on_click=toggle_attachment_menu,
+    )
+
+
+def render_attachment_menu_panel() -> None:
+    if not st.session_state.get("attachment_menu_open", False):
+        return
+
     images = st.session_state.get("input_images", []) or []
     docs = st.session_state.get("input_docs", []) or []
     attachment_count = len(images) + len(docs)
 
-    with st.popover(" ", icon=":material/add:", help="添加附件", use_container_width=True):
+    with st.container():
+        st.markdown('<div class="composer-attachment-panel-marker"></div>', unsafe_allow_html=True)
         if attachment_count:
             st.caption(f"已添加 {attachment_count} 个附件")
-        st.file_uploader(
-            "上传影像",
-            type=["png", "jpg", "jpeg", "webp"],
-            key="input_images",
-            accept_multiple_files=True,
-        )
-        st.file_uploader(
-            "上传文档",
-            type=["pdf", "txt", "docx"],
-            key="input_docs",
-            accept_multiple_files=True,
-        )
+        img_col, doc_col = st.columns(2)
+        with img_col:
+            st.file_uploader(
+                "上传影像",
+                type=["png", "jpg", "jpeg", "webp"],
+                key="input_images",
+                accept_multiple_files=True,
+            )
+        with doc_col:
+            st.file_uploader(
+                "上传文档",
+                type=["pdf", "txt", "docx"],
+                key="input_docs",
+                accept_multiple_files=True,
+            )
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -305,6 +328,7 @@ def init_state() -> None:
         "active_view": "Control Room",
         "history_focus": None,
         "settings_workspace_section": SETTINGS_SECTIONS[0],
+        "attachment_menu_open": False,
         "clipboard_notice": "",
         # Conversation messages: list of dicts
         "messages": [],          # {"role": "user"|"assistant"|"system", "content": str, "meta": dict}
@@ -356,6 +380,7 @@ def reset_workspace() -> None:
         "input_age": "",
         "input_chief": "",
         "input_expanded": False,
+        "attachment_menu_open": False,
         "clipboard_notice": "",
     }
     for key, value in defaults.items():
@@ -836,12 +861,13 @@ def render_input_area() -> None:
 
 def render_composer_controls(settings: SystemSettings, submit_key: str) -> None:
     has_input = bool(st.session_state.get("input_main", "").strip())
+    render_attachment_menu_panel()
     add_col, spacer_col, toggle_col, paste_col, reset_col, send_col = st.columns(
         [0.18, 1.28, 0.42, 0.18, 0.18, 0.18],
         vertical_alignment="center",
     )
     with add_col:
-        render_attachment_menu()
+        render_attachment_menu_toggle()
     with spacer_col:
         st.markdown('<div class="composer-controls-spacer"></div>', unsafe_allow_html=True)
     with toggle_col:
@@ -1061,6 +1087,7 @@ def _handle_submit(settings: SystemSettings) -> None:
 
     # Clear input
     st.session_state["input_main"] = ""
+    st.session_state["attachment_menu_open"] = False
     st.session_state.active_view = "Control Room"
     st.session_state.history_focus = None
     st.rerun()

@@ -776,6 +776,15 @@ def inject_css() -> None:
                 min-height: 1px;
             }
 
+            .stApp [data-testid="stVerticalBlock"]:has(.composer-attachment-panel-marker) {
+                background: linear-gradient(180deg, rgba(252, 253, 255, 0.98), rgba(246, 249, 253, 0.96));
+                border: 1px solid rgba(213, 223, 238, 0.96);
+                border-radius: 20px;
+                padding: 0.65rem 0.8rem 0.25rem;
+                margin: 0.15rem 0 0.65rem;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.92);
+            }
+
             .dialog-composer-buffer {
                 height: clamp(18rem, 32vh, 24rem);
             }
@@ -1041,6 +1050,20 @@ def inject_css() -> None:
                 background: rgba(255, 255, 255, 1) !important;
                 border-color: rgba(47, 109, 246, 0.32) !important;
                 box-shadow: 0 14px 24px rgba(15, 23, 42, 0.08), 0 0 0 3px rgba(47, 109, 246, 0.06) !important;
+            }
+
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button > div {
+                justify-content: center !important;
+                gap: 0 !important;
+                margin-right: 0 !important;
+            }
+
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button > div > div:last-child {
+                display: none !important;
+            }
+
+            .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) div[data-testid="stPopoverButton"] > button svg:last-of-type {
+                display: none !important;
             }
 
             .stApp [data-testid="stVerticalBlockBorderWrapper"]:has(.composer-head) .stButton > button:disabled {
