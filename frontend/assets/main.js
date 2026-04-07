@@ -1075,19 +1075,12 @@
       }
     }
 
-    const currentTitle = useMemo(() => {
-      if (activeView === "settings") {
-        return SETTINGS_SECTION_COPY[settingsSection].title;
-      }
-      return currentSession?.title || "会诊工作区";
-    }, [activeView, currentSession, settingsSection]);
+    const currentTitle = useMemo(() => currentSession?.title || "会诊工作区", [currentSession]);
 
-    const currentCopy = useMemo(() => {
-      if (activeView === "settings") {
-        return SETTINGS_SECTION_COPY[settingsSection].copy;
-      }
-      return currentSession?.summary || "在底部输入病例摘要，系统会生成结构化诊断建议。";
-    }, [activeView, currentSession, settingsSection]);
+    const currentCopy = useMemo(
+      () => currentSession?.summary || "在底部输入病例摘要，系统会生成结构化诊断建议。",
+      [currentSession]
+    );
 
     if (bootstrapping || !meta || !profile || !settings || !profileDraft || !settingsDraft) {
       return html`
@@ -1119,21 +1112,21 @@
         <button className="sidebar-toggle-rail" onClick=${() => setSidebarCollapsed((current) => !current)} aria-label="Toggle sidebar"></button>
 
         <main className="shell-main">
-          <div className="main-topbar">
-            <div>
-              <div className="topbar-title">${currentTitle}</div>
-              <div className="topbar-copy">${currentCopy}</div>
-            </div>
-            <div className="topbar-actions">
-              ${activeView === "workspace" &&
-              html`
+          ${activeView === "workspace" &&
+          html`
+            <div className="main-topbar">
+              <div>
+                <div className="topbar-title">${currentTitle}</div>
+                <div className="topbar-copy">${currentCopy}</div>
+              </div>
+              <div className="topbar-actions">
                 <button className=${cx("chip", diagnosticsOpen && "is-active")} onClick=${() => setDiagnosticsOpen(true)}>
                   <${Icon} name="hub" size=${16} />
                   诊断面板
                 </button>
-              `}
+              </div>
             </div>
-          </div>
+          `}
 
           <div className="main-scroll">
             ${activeView === "settings"
