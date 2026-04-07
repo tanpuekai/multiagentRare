@@ -465,9 +465,11 @@ def render_sidebar() -> None:
             <div class="sidebar-brand">
                 <div class="sidebar-brand-logo">
                     <div class="sidebar-logo-mark">R</div>
-                    <div class="sidebar-logo-text">RareMDT</div>
+                    <div class="sidebar-brand-copy">
+                        <div class="sidebar-logo-text">RareMDT</div>
+                        <div class="sidebar-brand-sub">罕见病多智能体诊疗系统</div>
+                    </div>
                 </div>
-                <div class="sidebar-brand-sub">罕见病多智能体诊疗系统</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -531,12 +533,14 @@ def render_sidebar() -> None:
         )
 
         with st.expander("⚙ 系统设置", expanded=False):
+            st.markdown('<div class="sidebar-section-label">系统设置</div>', unsafe_allow_html=True)
             render_sidebar_settings_panel()
             if st.button("在主区域打开系统设置", key="sidebar_open_settings_main", use_container_width=True):
                 open_settings_workspace("系统设置")
                 st.rerun()
 
-        with st.expander("医生档案", expanded=False):
+            st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="sidebar-section-label">医生档案</div>', unsafe_allow_html=True)
             render_sidebar_profile_panel()
             if st.button("在主区域打开医生档案", key="sidebar_open_profile_main", use_container_width=True):
                 open_settings_workspace("医生档案")

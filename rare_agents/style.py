@@ -105,7 +105,7 @@ def inject_css() -> None:
             }
 
             .stApp [data-testid="stSidebarContent"] {
-                padding: 1.2rem 1rem 1rem !important;
+                padding: max(0.35rem, calc(5vh - 2.4rem)) 1rem 1rem !important;
                 background: transparent !important;
             }
 
@@ -115,42 +115,61 @@ def inject_css() -> None:
             }
 
             .sidebar-brand {
-                padding: 0.3rem 0.25rem 0.5rem;
+                position: relative;
+                overflow: hidden;
+                padding: 0.35rem 0.35rem 0.8rem;
+                margin: 0 0 0.4rem;
+                border-radius: 22px;
+                background:
+                    radial-gradient(circle at top right, rgba(96, 165, 250, 0.24), transparent 40%),
+                    linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,255,255,0.54));
+                border: 1px solid rgba(255,255,255,0.86);
+                box-shadow: 0 16px 36px rgba(15, 23, 42, 0.07), inset 0 1px 0 rgba(255,255,255,0.9);
             }
 
             .sidebar-brand-logo {
                 display: flex;
-                align-items: center;
-                gap: 0.75rem;
-                margin-bottom: 0.35rem;
+                align-items: flex-start;
+                gap: 0.9rem;
+            }
+
+            .sidebar-brand-copy {
+                display: flex;
+                flex-direction: column;
+                gap: 0.18rem;
+                min-width: 0;
             }
 
             .sidebar-logo-mark {
-                width: 34px;
-                height: 34px;
-                border-radius: 11px;
-                background: linear-gradient(135deg, #1d4ed8, #60a5fa);
+                width: 46px;
+                height: 46px;
+                border-radius: 15px;
+                background: linear-gradient(145deg, #1d4ed8, #60a5fa 72%, #93c5fd);
                 color: var(--text-inverse);
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 0.86rem;
+                font-size: 1rem;
                 font-weight: 700;
-                box-shadow: 0 10px 24px rgba(37, 99, 235, 0.24);
+                letter-spacing: 0.03em;
+                box-shadow: 0 16px 30px rgba(37, 99, 235, 0.26);
+                flex-shrink: 0;
             }
 
             .sidebar-logo-text {
-                font-size: 1rem;
-                font-weight: 700;
+                font-size: 1.34rem;
+                font-weight: 750;
+                line-height: 1.05;
+                letter-spacing: -0.03em;
                 color: var(--text-primary);
             }
 
             .sidebar-brand-sub {
-                font-size: 0.8rem;
+                font-size: 0.9rem;
                 color: var(--text-secondary);
-                line-height: 1.55;
-                padding-left: 2.95rem;
-                max-width: 240px;
+                line-height: 1.45;
+                max-width: 210px;
+                font-weight: 500;
             }
 
             .sidebar-divider {
