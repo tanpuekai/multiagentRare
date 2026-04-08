@@ -29,6 +29,7 @@
   --radius-sm: 12px;
   --sidebar-width: 318px;
   --sidebar-collapsed-width: 0px;
+  --diagnostics-width: 420px;
   --transition: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
   color-scheme: light;
 }
@@ -578,12 +579,47 @@ a {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   border-radius: 34px;
   background: transparent;
   border: 1px solid transparent;
   box-shadow: none;
   backdrop-filter: none;
   overflow: hidden;
+}
+
+.workspace-region {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0;
+  gap: 0;
+  align-items: stretch;
+  transition:
+    grid-template-columns var(--transition),
+    gap var(--transition);
+}
+
+.workspace-region.diagnostics-open {
+  grid-template-columns: minmax(0, 1fr) var(--diagnostics-width);
+  gap: 18px;
+}
+
+.main-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.diagnostics-toggle-button {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translate(50%, -50%);
+  z-index: 14;
 }
 
 .main-topbar {
@@ -844,24 +880,32 @@ a {
 }
 
 .drawer {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  bottom: 16px;
-  width: min(420px, calc(100% - 32px));
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
   border-radius: 30px;
-  background: rgba(255,255,255,0.98);
-  border: 1px solid rgba(255,255,255,0.82);
-  box-shadow: var(--shadow-shell);
-  transform: translateX(calc(100% + 18px));
-  transition: transform var(--transition);
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  transform: translateX(28px);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--transition),
+    opacity var(--transition);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .drawer.is-open {
+  background: rgba(255,255,255,0.98);
+  border-color: rgba(255,255,255,0.82);
+  box-shadow: var(--shadow-shell);
   transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .drawer-head {
@@ -1431,6 +1475,10 @@ a {
 }
 
 @media (max-width: 1080px) {
+  :root {
+    --diagnostics-width: 360px;
+  }
+
   .app-shell {
     padding: 14px;
     gap: 14px;
@@ -1457,6 +1505,10 @@ a {
 }
 
 @media (max-width: 820px) {
+  :root {
+    --diagnostics-width: 320px;
+  }
+
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -280,7 +280,7 @@
 
   function ResultWorkspace({ session, meta }) {
     if (!session) {
-      return html`<div className="empty-feed">将病例摘要粘贴到下方输入区，系统会在这里生成临床结论与过程诊断。</div>`;
+      return null;
     }
 
     if (!session.result || !session.submission) {
@@ -399,7 +399,6 @@
   function DiagnosticsDrawer({ open, session, meta, onClose }) {
     const result = session?.result;
     return html`
-      <div className=${cx("drawer-backdrop", open && "is-open")} onClick=${onClose}></div>
       <aside className=${cx("drawer", open && "is-open")}>
         <div className="drawer-head">
           <div>
@@ -1662,13 +1661,6 @@
       }
     }
 
-    const currentTitle = useMemo(() => currentSession?.title || "会诊工作区", [currentSession]);
-
-    const currentCopy = useMemo(
-      () => currentSession?.summary || "在底部输入病例摘要，系统会生成结构化诊断建议。",
-      [currentSession]
-    );
-
     if (bootstrapping) {
       return html`
         <div className="loading-screen">
@@ -1721,81 +1713,78 @@
 
         <button className="sidebar-toggle-rail" onClick=${() => setSidebarCollapsed((current) => !current)} aria-label="Toggle sidebar"></button>
 
-        <main className="shell-main">
-          ${activeView === "workspace" &&
-          html`
-            <div className="main-topbar">
-              <div>
-                <div className="topbar-title">${currentTitle}</div>
-                <div className="topbar-copy">${currentCopy}</div>
+        <div className=${cx("workspace-region", activeView === "workspace" && diagnosticsOpen && "diagnostics-open")}>
+          <div className="main-stage">
+            <main className="shell-main">
+              <div className="main-scroll">
+                ${activeView === "settings"
+                  ? html`
+                      <${SettingsWorkspace}
+                        meta=${meta}
+                        section=${settingsSection}
+                        profileDraft=${profileDraft}
+                        setProfileDraft=${setProfileDraft}
+                        settingsDraft=${settingsDraft}
+                        setSettingsDraft=${setSettingsDraft}
+                        sessions=${sessions}
+                        onOpenSession=${openHistorySession}
+                        onClose=${closeSettings}
+                        onSaveProfile=${saveProfileDraft}
+                        onSaveSettings=${saveSettingsDraft}
+                        onSwitchSection=${switchSettingsSection}
+                        isSaving=${isSaving}
+                        onTestProvider=${testProvider}
+                        testingProviderIndex=${testingProviderIndex}
+                        onToggleSidebarSession=${setSessionSidebarVisibility}
+                        onSetAllSidebarSessions=${setAllSidebarSessions}
+                        visibilityBusyKey=${visibilityBusyKey}
+                        historyPreviewSession=${historyPreviewSession}
+                        isHistoryPreviewLoading=${isHistoryPreviewLoading}
+                        onCloseHistoryPreview=${closeHistoryPreview}
+                        adminAccounts=${adminAccounts}
+                        accountDraft=${accountDraft}
+                        setAccountDraft=${setAccountDraft}
+                        onCreateAccount=${createAccount}
+                        onToggleAccountDisabled=${toggleAccountDisabled}
+                        onDeleteAccount=${deleteAccount}
+                        currentUser=${currentUser}
+                        isAccountMutating=${isAccountMutating}
+                      />
+                    `
+                  : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
               </div>
-              <div className="topbar-actions">
-                <button
-                  className=${cx("ghost-icon-button", "tooltip-button", diagnosticsOpen && "is-active")}
-                  onClick=${() => setDiagnosticsOpen(true)}
-                  aria-label="诊断面板"
-                  data-tooltip="诊断面板"
-                >
-                  <${Icon} name="hub" size=${18} />
-                </button>
-              </div>
-            </div>
-          `}
 
-          <div className="main-scroll">
-            ${activeView === "settings"
-              ? html`
-                  <${SettingsWorkspace}
-                    meta=${meta}
-                    section=${settingsSection}
-                    profileDraft=${profileDraft}
-                    setProfileDraft=${setProfileDraft}
-                    settingsDraft=${settingsDraft}
-                    setSettingsDraft=${setSettingsDraft}
-                    sessions=${sessions}
-                    onOpenSession=${openHistorySession}
-                    onClose=${closeSettings}
-                    onSaveProfile=${saveProfileDraft}
-                    onSaveSettings=${saveSettingsDraft}
-                    onSwitchSection=${switchSettingsSection}
-                    isSaving=${isSaving}
-                    onTestProvider=${testProvider}
-                    testingProviderIndex=${testingProviderIndex}
-                    onToggleSidebarSession=${setSessionSidebarVisibility}
-                    onSetAllSidebarSessions=${setAllSidebarSessions}
-                    visibilityBusyKey=${visibilityBusyKey}
-                    historyPreviewSession=${historyPreviewSession}
-                    isHistoryPreviewLoading=${isHistoryPreviewLoading}
-                    onCloseHistoryPreview=${closeHistoryPreview}
-                    adminAccounts=${adminAccounts}
-                    accountDraft=${accountDraft}
-                    setAccountDraft=${setAccountDraft}
-                    onCreateAccount=${createAccount}
-                    onToggleAccountDisabled=${toggleAccountDisabled}
-                    onDeleteAccount=${deleteAccount}
-                    currentUser=${currentUser}
-                    isAccountMutating=${isAccountMutating}
-                  />
-                `
-              : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
+              ${activeView === "workspace" &&
+              html`
+                <${Composer}
+                  meta=${meta}
+                  settings=${settings}
+                  composer=${composer}
+                  setComposer=${setComposer}
+                  onSubmit=${submitCase}
+                  onReset=${resetComposer}
+                  isSubmitting=${isSubmitting}
+                  pushNotice=${pushNotice}
+                />
+              `}
+            </main>
+
+            ${activeView === "workspace" &&
+            html`
+              <button
+                className=${cx("ghost-icon-button", "tooltip-button", "diagnostics-toggle-button", diagnosticsOpen && "is-active")}
+                onClick=${() => setDiagnosticsOpen((current) => !current)}
+                aria-label="诊断面板"
+                data-tooltip="诊断面板"
+              >
+                <${Icon} name="hub" size=${18} />
+              </button>
+            `}
           </div>
 
           ${activeView === "workspace" &&
-          html`
-            <${Composer}
-              meta=${meta}
-              settings=${settings}
-              composer=${composer}
-              setComposer=${setComposer}
-              onSubmit=${submitCase}
-              onReset=${resetComposer}
-              isSubmitting=${isSubmitting}
-              pushNotice=${pushNotice}
-            />
-          `}
-
-          <${DiagnosticsDrawer} open=${diagnosticsOpen} session=${currentSession} meta=${meta} onClose=${() => setDiagnosticsOpen(false)} />
-        </main>
+          html`<${DiagnosticsDrawer} open=${diagnosticsOpen} session=${currentSession} meta=${meta} onClose=${() => setDiagnosticsOpen(false)} />`}
+        </div>
       </div>
     `;
   }
