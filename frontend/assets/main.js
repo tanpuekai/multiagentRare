@@ -1249,7 +1249,7 @@
     const [activeView, setActiveView] = useState("workspace");
     const [settingsSection, setSettingsSection] = useState("医生档案");
     const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
     const [profileDraft, setProfileDraft] = useState(null);
     const [settingsDraft, setSettingsDraft] = useState(null);
@@ -1711,7 +1711,14 @@
           onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
         />
 
-        <button className="sidebar-toggle-rail" onClick=${() => setSidebarCollapsed((current) => !current)} aria-label="Toggle sidebar"></button>
+        <button
+          className="sidebar-toggle-rail"
+          onClick=${() => {
+            setSettingsMenuOpen(false);
+            setSidebarCollapsed((current) => !current);
+          }}
+          aria-label="Toggle sidebar"
+        ></button>
 
         <div className=${cx("workspace-region", activeView === "workspace" && diagnosticsOpen && "diagnostics-open")}>
           <div className="main-stage">
