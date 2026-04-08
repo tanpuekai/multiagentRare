@@ -986,17 +986,6 @@
           </button>
         </div>
 
-        <div className="settings-nav">
-          ${meta.settings_menu.map(
-            (item) => html`
-              <button key=${item.section} className=${cx("chip", section === item.section && "is-active")} onClick=${() => onSwitchSection(item.section)}>
-                <${Icon} name=${item.icon} size=${16} />
-                ${item.label}
-              </button>
-            `
-          )}
-        </div>
-
         ${section === "医生档案" &&
         html`
           <${ProfileSettings} meta=${meta} draft=${profileDraft} setDraft=${setProfileDraft} />
