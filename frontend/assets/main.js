@@ -16,6 +16,7 @@
     hub: "M12 3v4M5 8l3 2M19 8l-3 2M12 21v-4M5 16l3-2M19 16l-3-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
     spark: "M12 3l1.8 4.8L18 9.6l-4.2 1.2L12 15.6l-1.8-4.8L6 9.6l4.2-1.8z",
     chevronLeft: "M15 6 9 12l6 6",
+    panelToggle: "M4.5 5.5h15v13h-15zM9 5.5v13M14.5 9.25 11.5 12l3 2.75",
     logout: "M15 17l5-5-5-5M20 12H9M11 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5",
   };
 
@@ -170,6 +171,8 @@
     onOpenSession,
     onOpenSettings,
     onLogout,
+    sidebarCollapsed,
+    onToggleSidebar,
     settingsMenuOpen,
     onToggleSettingsMenu,
   }) {
@@ -178,6 +181,12 @@
     return html`
       <aside className="shell-sidebar">
         <div className="sidebar-inner">
+          <div className="sidebar-toolbar">
+            <button className="ghost-icon-button sidebar-toggle-button" onClick=${onToggleSidebar} aria-label=${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>
+              <${Icon} name="panelToggle" size=${18} className=${cx("sidebar-toggle-icon", sidebarCollapsed && "is-collapsed")} />
+            </button>
+          </div>
+
           <div className="sidebar-brand">
             <div className="brand-mark">R</div>
             <div className="brand-text">
@@ -1707,18 +1716,14 @@
           onOpenSession=${openSession}
           onOpenSettings=${openSettings}
           onLogout=${logout}
-          settingsMenuOpen=${settingsMenuOpen}
-          onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
-        />
-
-        <button
-          className="sidebar-toggle-rail"
-          onClick=${() => {
+          sidebarCollapsed=${sidebarCollapsed}
+          onToggleSidebar=${() => {
             setSettingsMenuOpen(false);
             setSidebarCollapsed((current) => !current);
           }}
-          aria-label="Toggle sidebar"
-        ></button>
+          settingsMenuOpen=${settingsMenuOpen}
+          onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
+        />
 
         <div className=${cx("workspace-region", activeView === "workspace" && diagnosticsOpen && "diagnostics-open")}>
           <div className="main-stage">
