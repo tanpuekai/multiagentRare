@@ -138,6 +138,8 @@
     settingsMenuOpen,
     onToggleSettingsMenu,
   }) {
+    const sidebarSessions = sessions.filter((session) => session.show_in_sidebar !== false);
+
     return html`
       <aside className="shell-sidebar">
         <div className="sidebar-inner">
@@ -152,8 +154,8 @@
           </div>
 
           <div className="sidebar-session-list">
-            ${sessions.length
-              ? sessions.map(
+            ${sidebarSessions.length
+              ? sidebarSessions.map(
                   (session) => html`
                     <button
                       key=${session.session_id}
@@ -574,21 +576,70 @@
     `;
   }
 
-  function HistoryPage({ meta, sessions, onOpenSession }) {
+  function HistoryPage({ meta, sessions, onOpenSession, onToggleSidebarSession, onSetAllSidebarSessions, visibilityBusyKey }) {
+    const [sortMode, setSortMode] = useState("date_desc");
+
+    const visibleCount = useMemo(() => sessions.filter((session) => session.show_in_sidebar !== false).length, [sessions]);
+
+    const sortedSessions = useMemo(() => {
+      const next = [...sessions];
+      if (sortMode === "name_asc") {
+        return next.sort((left, right) => left.title.localeCompare(right.title, "zh-Hans-CN"));
+      }
+      if (sortMode === "name_desc") {
+        return next.sort((left, right) => right.title.localeCompare(left.title, "zh-Hans-CN"));
+      }
+      if (sortMode === "date_asc") {
+        return next.sort((left, right) => (left.timestamp || "").localeCompare(right.timestamp || ""));
+      }
+      return next.sort((left, right) => (right.timestamp || "").localeCompare(left.timestamp || ""));
+    }, [sessions, sortMode]);
+
     return html`
       <div className="settings-content">
+        <div className="history-toolbar">
+          <div className="history-toolbar-group">
+            <button className="secondary-button" onClick=${() => onSetAllSidebarSessions(true)} disabled=${Boolean(visibilityBusyKey)}>
+              全部显示
+            </button>
+            <button className="secondary-button" onClick=${() => onSetAllSidebarSessions(false)} disabled=${Boolean(visibilityBusyKey)}>
+              全部隐藏
+            </button>
+          </div>
+          <div className="history-toolbar-group history-toolbar-meta">
+            <span>${visibleCount} / ${sessions.length} 显示在侧栏</span>
+            <select value=${sortMode} onChange=${(event) => setSortMode(event.target.value)}>
+              <option value="date_desc">按时间排序: 新到旧</option>
+              <option value="date_asc">按时间排序: 旧到新</option>
+              <option value="name_asc">按名称排序: A-Z</option>
+              <option value="name_desc">按名称排序: Z-A</option>
+            </select>
+          </div>
+        </div>
         <div className="history-list">
-          ${sessions.length
-            ? sessions.map(
+          ${sortedSessions.length
+            ? sortedSessions.map(
                 (session) => html`
-                  <button key=${session.session_id} className="sidebar-item" onClick=${() => onOpenSession(session.session_id)}>
-                    <div className="sidebar-item-row">
-                      <div className="sidebar-item-title">${session.title}</div>
-                      <span className="badge">${Math.round((session.consensus_score || 0) * 100)}%</span>
-                    </div>
-                    <div className="sidebar-item-meta">${label(meta, "department", session.department)} · ${label(meta, "output", session.output_style)}</div>
-                    <div className="sidebar-item-meta">${session.summary}</div>
-                  </button>
+                  <div key=${session.session_id} className="history-card">
+                    <button className="history-card-main" onClick=${() => onOpenSession(session.session_id)}>
+                      <div className="sidebar-item-row">
+                        <div className="sidebar-item-title">${session.title}</div>
+                        <span className="badge">${Math.round((session.consensus_score || 0) * 100)}%</span>
+                      </div>
+                      <div className="sidebar-item-meta">${label(meta, "department", session.department)} · ${label(meta, "output", session.output_style)}</div>
+                      <div className="history-item-time">${formatTimestamp(session.timestamp)}</div>
+                      <div className="history-item-summary">${session.summary}</div>
+                    </button>
+                    <button
+                      className=${cx("history-toggle", session.show_in_sidebar !== false && "is-on")}
+                      onClick=${() => onToggleSidebarSession(session.session_id, session.show_in_sidebar === false)}
+                      disabled=${Boolean(visibilityBusyKey)}
+                      aria-label=${session.show_in_sidebar === false ? "Show in sidebar" : "Hide from sidebar"}
+                      title=${session.show_in_sidebar === false ? "在侧栏显示" : "从侧栏隐藏"}
+                    >
+                      <span className="history-toggle-thumb"></span>
+                    </button>
+                  </div>
                 `
               )
             : html`<div className="sidebar-item-meta">暂无历史记录。</div>`}
@@ -871,6 +922,9 @@
     isSaving,
     onTestProvider,
     testingProviderIndex,
+    onToggleSidebarSession,
+    onSetAllSidebarSessions,
+    visibilityBusyKey,
   }) {
     const sectionMeta = SETTINGS_SECTION_COPY[section];
 
@@ -923,7 +977,17 @@
             </div>
           `}
 
-          ${section === "历史记录" && html`<${HistoryPage} meta=${meta} sessions=${sessions} onOpenSession=${onOpenSession} />`}
+          ${section === "历史记录" &&
+          html`
+            <${HistoryPage}
+              meta=${meta}
+              sessions=${sessions}
+              onOpenSession=${onOpenSession}
+              onToggleSidebarSession=${onToggleSidebarSession}
+              onSetAllSidebarSessions=${onSetAllSidebarSessions}
+              visibilityBusyKey=${visibilityBusyKey}
+            />
+          `}
         </div>
       </div>
     `;
@@ -947,6 +1011,7 @@
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [testingProviderIndex, setTestingProviderIndex] = useState(null);
+    const [visibilityBusyKey, setVisibilityBusyKey] = useState(null);
     const [notices, setNotices] = useState([]);
 
     function pushNotice(message, kind = "success") {
@@ -957,6 +1022,23 @@
       }, 2800);
     }
 
+    function applySessionList(nextSessions) {
+      setSessions(nextSessions || []);
+      setCurrentSession((current) => {
+        if (!current) {
+          return current;
+        }
+        const matched = (nextSessions || []).find((session) => session.session_id === current.session_id);
+        if (!matched) {
+          return current;
+        }
+        return {
+          ...current,
+          show_in_sidebar: matched.show_in_sidebar,
+        };
+      });
+    }
+
     async function bootstrap() {
       setBootstrapping(true);
       try {
@@ -964,7 +1046,7 @@
         setProfile(data.profile);
         setSettings(data.settings);
         setMeta(data.meta);
-        setSessions(data.sessions || []);
+        applySessionList(data.sessions || []);
         setProfileDraft(cloneData(data.profile));
         setSettingsDraft(cloneData(data.settings));
         setComposer(makeDefaultComposer(data.meta, data.settings));
@@ -1045,7 +1127,7 @@
           body: JSON.stringify(payload),
         });
         setCurrentSession(data.session);
-        setSessions(data.sessions || []);
+        applySessionList(data.sessions || []);
         setComposer(makeDefaultComposer(meta, settings));
         setActiveView("workspace");
         pushNotice("会诊已生成。");
@@ -1113,6 +1195,44 @@
         pushNotice(error.message, "error");
       } finally {
         setTestingProviderIndex(null);
+      }
+    }
+
+    async function setSessionSidebarVisibility(sessionId, showInSidebar) {
+      setVisibilityBusyKey(sessionId);
+      try {
+        const data = await fetchJson("/api/sessions/sidebar-visibility", {
+          method: "PUT",
+          body: JSON.stringify({
+            session_id: sessionId,
+            show_in_sidebar: showInSidebar,
+          }),
+        });
+        applySessionList(data.sessions || []);
+        pushNotice(showInSidebar ? "已显示在侧栏。" : "已从侧栏隐藏。");
+      } catch (error) {
+        pushNotice(error.message, "error");
+      } finally {
+        setVisibilityBusyKey(null);
+      }
+    }
+
+    async function setAllSidebarSessions(showInSidebar) {
+      setVisibilityBusyKey(showInSidebar ? "all-show" : "all-hide");
+      try {
+        const data = await fetchJson("/api/sessions/sidebar-visibility", {
+          method: "PUT",
+          body: JSON.stringify({
+            apply_to_all: true,
+            show_in_sidebar: showInSidebar,
+          }),
+        });
+        applySessionList(data.sessions || []);
+        pushNotice(showInSidebar ? "已将全部记录显示到侧栏。" : "已将全部记录从侧栏隐藏。");
+      } catch (error) {
+        pushNotice(error.message, "error");
+      } finally {
+        setVisibilityBusyKey(null);
       }
     }
 
@@ -1191,6 +1311,9 @@
                     isSaving=${isSaving}
                     onTestProvider=${testProvider}
                     testingProviderIndex=${testingProviderIndex}
+                    onToggleSidebarSession=${setSessionSidebarVisibility}
+                    onSetAllSidebarSessions=${setAllSidebarSessions}
+                    visibilityBusyKey=${visibilityBusyKey}
                   />
                 `
               : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}

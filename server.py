@@ -20,6 +20,7 @@ from rare_agents.service import (
     settings_from_payload,
     submit_case,
     test_provider_connection,
+    update_session_sidebar_visibility,
 )
 
 
@@ -84,6 +85,20 @@ async def test_provider(request: Request) -> dict:
         return test_provider_connection(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/sessions/sidebar-visibility")
+async def update_session_visibility(request: Request) -> dict:
+    payload = await request.json()
+    try:
+        sessions = update_session_sidebar_visibility(
+            show_in_sidebar=bool(payload.get("show_in_sidebar", True)),
+            session_id=str(payload.get("session_id", "")).strip() or None,
+            apply_to_all=bool(payload.get("apply_to_all", False)),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"sessions": [serialize_session(session, include_details=False) for session in sessions]}
 
 
 @app.post("/api/diagnose")

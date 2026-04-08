@@ -218,6 +218,7 @@ def load_sessions() -> list[CaseSessionRecord]:
                 output_style=item["output_style"],
                 summary=item["summary"],
                 consensus_score=float(item["consensus_score"]),
+                show_in_sidebar=bool(item.get("show_in_sidebar", True)),
                 submission=_load_submission(item.get("submission")),
                 result=_load_result(item.get("result")),
             )
@@ -494,11 +495,38 @@ def serialize_session(session: CaseSessionRecord, *, include_details: bool = Tru
         "output_style": session.output_style,
         "summary": session.summary,
         "consensus_score": session.consensus_score,
+        "show_in_sidebar": session.show_in_sidebar,
     }
     if include_details:
         payload["submission"] = asdict(session.submission) if session.submission else None
         payload["result"] = asdict(session.result) if session.result else None
     return payload
+
+
+def update_session_sidebar_visibility(*, show_in_sidebar: bool, session_id: str | None = None, apply_to_all: bool = False) -> list[CaseSessionRecord]:
+    sessions = load_sessions()
+    changed = False
+
+    if apply_to_all:
+        for session in sessions:
+            if session.show_in_sidebar != show_in_sidebar:
+                session.show_in_sidebar = show_in_sidebar
+                changed = True
+    else:
+        if not session_id:
+            raise ValueError("缺少会诊记录标识。")
+        for session in sessions:
+            if session.session_id == session_id:
+                if session.show_in_sidebar != show_in_sidebar:
+                    session.show_in_sidebar = show_in_sidebar
+                    changed = True
+                break
+        else:
+            raise ValueError("未找到对应会诊记录。")
+
+    if changed:
+        save_sessions(sessions)
+    return sessions
 
 
 def get_bootstrap_payload() -> dict[str, Any]:

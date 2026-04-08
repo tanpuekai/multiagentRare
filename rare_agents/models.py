@@ -146,6 +146,7 @@ class CaseSessionRecord:
     output_style: str
     summary: str
     consensus_score: float
+    show_in_sidebar: bool = True
     submission: CaseSubmission | None = None
     result: EngineResult | None = None
 
@@ -160,6 +161,7 @@ class CaseSessionRecord:
             output_style=submission.output_style,
             summary=result.executive_summary,
             consensus_score=result.consensus_score,
+            show_in_sidebar=True,
             submission=submission,
             result=result,
         )
@@ -174,6 +176,7 @@ class CaseSessionRecord:
             output_style=item.output_style,
             summary=item.summary,
             consensus_score=item.consensus_score,
+            show_in_sidebar=True,
         )
 
 
