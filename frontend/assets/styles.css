@@ -79,17 +79,20 @@ a {
   height: 100%;
   padding: 20px;
   gap: 18px;
-  transition: grid-template-columns var(--transition);
+  transition:
+    grid-template-columns var(--transition),
+    gap var(--transition);
 }
 
 .app-shell.sidebar-collapsed {
   grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);
+  gap: 6px;
 }
 
 .shell-sidebar {
   position: relative;
   min-width: 0;
-  margin: -20px 0 -20px -20px;
+  margin: -20px -2px -20px -20px;
   border-radius: 0;
   background: #eef2f6;
   border: 1px solid rgba(148, 163, 184, 0.16);
