@@ -285,6 +285,20 @@ a {
   font: inherit;
 }
 
+.history-detail-view {
+  gap: 18px;
+}
+
+.history-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.history-detail-view .empty-feed {
+  padding: 48px 20px 28px;
+}
+
 .history-card {
   border-radius: 18px;
   border: 1px solid transparent;

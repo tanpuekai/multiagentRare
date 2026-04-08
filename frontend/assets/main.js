@@ -576,11 +576,19 @@
     `;
   }
 
-  function HistoryPage({ meta, sessions, onOpenSession, onToggleSidebarSession, onSetAllSidebarSessions, visibilityBusyKey }) {
+  function HistoryPage({
+    meta,
+    sessions,
+    onOpenSession,
+    onToggleSidebarSession,
+    onSetAllSidebarSessions,
+    visibilityBusyKey,
+    selectedSession,
+    isLoadingDetail,
+    onBack,
+  }) {
     const [sortMode, setSortMode] = useState("date_desc");
-
     const visibleCount = useMemo(() => sessions.filter((session) => session.show_in_sidebar !== false).length, [sessions]);
-
     const sortedSessions = useMemo(() => {
       const next = [...sessions];
       if (sortMode === "name_asc") {
@@ -594,6 +602,23 @@
       }
       return next.sort((left, right) => (right.timestamp || "").localeCompare(left.timestamp || ""));
     }, [sessions, sortMode]);
+
+    if (selectedSession || isLoadingDetail) {
+      return html`
+        <div className="settings-content history-detail-view">
+          <div className="history-detail-actions">
+            <button className="secondary-button" onClick=${onBack}>
+              <${Icon} name="chevronLeft" size=${16} />
+              返回历史列表
+            </button>
+          </div>
+
+          ${isLoadingDetail
+            ? html`<div className="empty-feed">正在加载会诊记录…</div>`
+            : html`<${ResultWorkspace} session=${selectedSession} meta=${meta} />`}
+        </div>
+      `;
+    }
 
     return html`
       <div className="settings-content">
@@ -925,6 +950,9 @@
     onToggleSidebarSession,
     onSetAllSidebarSessions,
     visibilityBusyKey,
+    historyPreviewSession,
+    isHistoryPreviewLoading,
+    onCloseHistoryPreview,
   }) {
     const sectionMeta = SETTINGS_SECTION_COPY[section];
 
@@ -986,6 +1014,9 @@
               onToggleSidebarSession=${onToggleSidebarSession}
               onSetAllSidebarSessions=${onSetAllSidebarSessions}
               visibilityBusyKey=${visibilityBusyKey}
+              selectedSession=${historyPreviewSession}
+              isLoadingDetail=${isHistoryPreviewLoading}
+              onBack=${onCloseHistoryPreview}
             />
           `}
         </div>
@@ -1012,6 +1043,8 @@
     const [isSaving, setIsSaving] = useState(false);
     const [testingProviderIndex, setTestingProviderIndex] = useState(null);
     const [visibilityBusyKey, setVisibilityBusyKey] = useState(null);
+    const [historyPreviewSession, setHistoryPreviewSession] = useState(null);
+    const [isHistoryPreviewLoading, setIsHistoryPreviewLoading] = useState(false);
     const [notices, setNotices] = useState([]);
 
     function pushNotice(message, kind = "success") {
@@ -1084,7 +1117,25 @@
       }
     }
 
+    async function openHistorySession(sessionId) {
+      setIsHistoryPreviewLoading(true);
+      try {
+        const data = await fetchJson(`/api/sessions/${sessionId}`);
+        setHistoryPreviewSession(data.session);
+      } catch (error) {
+        pushNotice(error.message, "error");
+      } finally {
+        setIsHistoryPreviewLoading(false);
+      }
+    }
+
+    function closeHistoryPreview() {
+      setHistoryPreviewSession(null);
+      setIsHistoryPreviewLoading(false);
+    }
+
     function openSettings(section) {
+      closeHistoryPreview();
       setSettingsSection(section);
       setActiveView("settings");
       setSettingsMenuOpen(false);
@@ -1092,7 +1143,13 @@
     }
 
     function closeSettings() {
+      closeHistoryPreview();
       setActiveView("workspace");
+    }
+
+    function switchSettingsSection(section) {
+      closeHistoryPreview();
+      setSettingsSection(section);
     }
 
     function resetComposer() {
@@ -1300,20 +1357,20 @@
                     settingsDraft=${settingsDraft}
                     setSettingsDraft=${setSettingsDraft}
                     sessions=${sessions}
-                    onOpenSession=${(sessionId) => {
-                      openSession(sessionId);
-                      closeSettings();
-                    }}
+                    onOpenSession=${openHistorySession}
                     onClose=${closeSettings}
                     onSaveProfile=${saveProfileDraft}
                     onSaveSettings=${saveSettingsDraft}
-                    onSwitchSection=${setSettingsSection}
+                    onSwitchSection=${switchSettingsSection}
                     isSaving=${isSaving}
                     onTestProvider=${testProvider}
                     testingProviderIndex=${testingProviderIndex}
                     onToggleSidebarSession=${setSessionSidebarVisibility}
                     onSetAllSidebarSessions=${setAllSidebarSessions}
                     visibilityBusyKey=${visibilityBusyKey}
+                    historyPreviewSession=${historyPreviewSession}
+                    isHistoryPreviewLoading=${isHistoryPreviewLoading}
+                    onCloseHistoryPreview=${closeHistoryPreview}
                   />
                 `
               : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
