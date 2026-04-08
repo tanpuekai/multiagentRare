@@ -653,10 +653,54 @@ a {
 
 .diagnostics-toggle-button {
   position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(50%, -50%);
+  top: -12px;
+  right: -12px;
+  transform: translate(0, 0);
   z-index: 14;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 999px;
+  color: rgba(15, 23, 42, 0.72);
+  transition:
+    transform var(--transition),
+    color var(--transition),
+    opacity var(--transition);
+}
+
+.diagnostics-toggle-button:hover,
+.diagnostics-toggle-button:focus-visible {
+  color: var(--accent-strong);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.diagnostics-toggle-button::after {
+  left: auto;
+  right: calc(100% + 10px);
+  bottom: 50%;
+  transform: translateY(50%) translateX(4px);
+}
+
+.diagnostics-toggle-button::before {
+  left: auto;
+  right: calc(100% + 4px);
+  bottom: 50%;
+  transform: translateY(50%) translateX(4px);
+  border: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid rgba(15, 23, 42, 0.96);
+}
+
+.diagnostics-toggle-button:hover::after,
+.diagnostics-toggle-button:hover::before,
+.diagnostics-toggle-button:focus-visible::after,
+.diagnostics-toggle-button:focus-visible::before {
+  transform: translateY(50%) translateX(0);
 }
 
 .main-topbar {
@@ -921,6 +965,7 @@ a {
   width: 100%;
   min-width: 0;
   height: 100%;
+  margin: -20px -20px -20px 0;
   border-radius: 30px;
   background: transparent;
   border: 1px solid transparent;
@@ -1564,6 +1609,15 @@ a {
 
   .shell-main {
     border-radius: 26px;
+  }
+
+  .diagnostics-toggle-button {
+    top: -14px;
+    right: -14px;
+  }
+
+  .drawer {
+    margin: -14px -14px -14px 0;
   }
 
   .main-topbar,

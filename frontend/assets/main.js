@@ -1781,10 +1781,10 @@
               `}
             </main>
 
-            ${activeView === "workspace" &&
+            ${activeView === "workspace" && !diagnosticsOpen &&
             html`
               <button
-                className=${cx("ghost-icon-button", "tooltip-button", "diagnostics-toggle-button", diagnosticsOpen && "is-active")}
+                className=${cx("tooltip-button", "diagnostics-toggle-button")}
                 onClick=${() => setDiagnosticsOpen((current) => !current)}
                 aria-label="诊断面板"
                 data-tooltip="诊断面板"
