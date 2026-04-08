@@ -9,6 +9,15 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
 
+from rare_agents.auth import (
+    create_account as create_auth_account,
+    delete_account as delete_auth_account,
+    ensure_auth_storage,
+    load_accounts,
+    serialize_auth_user,
+    set_account_disabled as set_auth_account_disabled,
+    user_data_dir,
+)
 from rare_agents.engine import run_multiagent_case
 from rare_agents.intake_parser import parse_ehr_intake
 from rare_agents.models import (
@@ -30,12 +39,12 @@ from rare_agents.storage import load_json, save_json
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
-PROFILE_PATH = DATA_DIR / "profile.json"
-SETTINGS_PATH = DATA_DIR / "settings.json"
-HISTORY_PATH = DATA_DIR / "history.json"
-SESSIONS_PATH = DATA_DIR / "sessions.json"
+LEGACY_PROFILE_PATH = DATA_DIR / "profile.json"
+LEGACY_SETTINGS_PATH = DATA_DIR / "settings.json"
+LEGACY_HISTORY_PATH = DATA_DIR / "history.json"
+LEGACY_SESSIONS_PATH = DATA_DIR / "sessions.json"
 
-SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录"]
+SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录", "账户管理"]
 DEPARTMENTS = [item.value for item in DepartmentOption]
 TOPOLOGIES = [mode.value for mode in OrchestrationMode]
 OUTPUT_STYLES = ["Diagnostic", "Surgical / Treatment Plan"]
@@ -47,11 +56,12 @@ INSURANCE_OPTIONS = [
     "Self-pay / uninsured",
     "Commercial",
 ]
-SETTINGS_MENU = [
+BASE_SETTINGS_MENU = [
     {"label": "账户", "section": "医生档案", "icon": "account"},
     {"label": "API / 智能体", "section": "系统设置", "icon": "hub"},
     {"label": "历史记录", "section": "历史记录", "icon": "history"},
 ]
+ADMIN_SETTINGS_MENU_ITEM = {"label": "账户管理", "section": "账户管理", "icon": "users"}
 
 DEPT_LABELS = {
     DepartmentOption.ORTHOPEDICS.value: "骨科",
@@ -154,27 +164,55 @@ def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
     ]
 
 
-def ensure_storage() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not PROFILE_PATH.exists():
-        save_json(PROFILE_PATH, asdict(default_profile()))
-    if not SETTINGS_PATH.exists():
-        save_json(SETTINGS_PATH, asdict(default_settings()))
-    if not HISTORY_PATH.exists():
-        save_json(HISTORY_PATH, [])
-    if not SESSIONS_PATH.exists():
-        save_json(SESSIONS_PATH, [])
+def _user_paths(username: str) -> dict[str, Path]:
+    root = user_data_dir(username)
+    return {
+        "root": root,
+        "profile": root / "profile.json",
+        "settings": root / "settings.json",
+        "history": root / "history.json",
+        "sessions": root / "sessions.json",
+    }
 
 
-def load_profile() -> AppProfile:
-    ensure_storage()
-    data = load_json(PROFILE_PATH, asdict(default_profile()))
+def ensure_storage(username: str) -> None:
+    ensure_auth_storage()
+    paths = _user_paths(username)
+    profile_seed = asdict(default_profile())
+    profile_seed["user_name"] = username
+    defaults = {
+        "profile": profile_seed,
+        "settings": asdict(default_settings()),
+        "history": [],
+        "sessions": [],
+    }
+    legacy_paths = {
+        "profile": LEGACY_PROFILE_PATH,
+        "settings": LEGACY_SETTINGS_PATH,
+        "history": LEGACY_HISTORY_PATH,
+        "sessions": LEGACY_SESSIONS_PATH,
+    }
+
+    for key in ["profile", "settings", "history", "sessions"]:
+        target = paths[key]
+        if target.exists():
+            continue
+        if username == "admin" and legacy_paths[key].exists():
+            payload = load_json(legacy_paths[key], defaults[key])
+        else:
+            payload = defaults[key]
+        save_json(target, payload)
+
+
+def load_profile(username: str) -> AppProfile:
+    ensure_storage(username)
+    data = load_json(_user_paths(username)["profile"], asdict(default_profile()))
     return AppProfile(**migrate_profile(data))
 
 
-def load_settings() -> SystemSettings:
-    ensure_storage()
-    data = load_json(SETTINGS_PATH, asdict(default_settings()))
+def load_settings(username: str) -> SystemSettings:
+    ensure_storage(username)
+    data = load_json(_user_paths(username)["settings"], asdict(default_settings()))
     providers = [APIProviderConfig(**provider) for provider in data.get("api_providers", [])]
     roles = [AgentRoleConfig(**role) for role in data.get("agent_roles", [])]
     return SystemSettings(
@@ -188,9 +226,9 @@ def load_settings() -> SystemSettings:
     )
 
 
-def load_history() -> list[QueryHistoryItem]:
-    ensure_storage()
-    return [QueryHistoryItem(**item) for item in load_json(HISTORY_PATH, [])]
+def load_history(username: str) -> list[QueryHistoryItem]:
+    ensure_storage(username)
+    return [QueryHistoryItem(**item) for item in load_json(_user_paths(username)["history"], [])]
 
 
 def _load_submission(data: dict[str, Any] | None) -> CaseSubmission | None:
@@ -205,9 +243,9 @@ def _load_result(data: dict[str, Any] | None) -> EngineResult | None:
     return EngineResult(**data)
 
 
-def load_sessions() -> list[CaseSessionRecord]:
-    ensure_storage()
-    raw = load_json(SESSIONS_PATH, [])
+def load_sessions(username: str) -> list[CaseSessionRecord]:
+    ensure_storage(username)
+    raw = load_json(_user_paths(username)["sessions"], [])
     if raw:
         return [
             CaseSessionRecord(
@@ -225,31 +263,31 @@ def load_sessions() -> list[CaseSessionRecord]:
             for item in raw
         ]
 
-    history = load_history()
+    history = load_history(username)
     return [
         CaseSessionRecord.from_history_item(f"history-{index}", item)
         for index, item in enumerate(history, start=1)
     ]
 
 
-def save_profile(profile: AppProfile) -> None:
-    save_json(PROFILE_PATH, asdict(profile))
+def save_profile(username: str, profile: AppProfile) -> None:
+    save_json(_user_paths(username)["profile"], asdict(profile))
 
 
-def save_settings(settings: SystemSettings) -> None:
-    save_json(SETTINGS_PATH, asdict(settings))
+def save_settings(username: str, settings: SystemSettings) -> None:
+    save_json(_user_paths(username)["settings"], asdict(settings))
 
 
-def save_history(history: list[QueryHistoryItem]) -> None:
-    save_json(HISTORY_PATH, [asdict(item) for item in history])
+def save_history(username: str, history: list[QueryHistoryItem]) -> None:
+    save_json(_user_paths(username)["history"], [asdict(item) for item in history])
 
 
-def save_sessions(sessions: list[CaseSessionRecord]) -> None:
-    save_json(SESSIONS_PATH, [asdict(item) for item in sessions])
+def save_sessions(username: str, sessions: list[CaseSessionRecord]) -> None:
+    save_json(_user_paths(username)["sessions"], [asdict(item) for item in sessions])
 
 
-def profile_from_payload(payload: dict[str, Any]) -> AppProfile:
-    current = load_profile()
+def profile_from_payload(username: str, payload: dict[str, Any]) -> AppProfile:
+    current = load_profile(username)
     return AppProfile(
         user_name=str(payload.get("user_name", current.user_name)).strip() or current.user_name,
         title=str(payload.get("title", current.title)).strip() or current.title,
@@ -262,8 +300,8 @@ def profile_from_payload(payload: dict[str, Any]) -> AppProfile:
     )
 
 
-def settings_from_payload(payload: dict[str, Any]) -> SystemSettings:
-    current = load_settings()
+def settings_from_payload(username: str, payload: dict[str, Any]) -> SystemSettings:
+    current = load_settings(username)
     providers = [
         APIProviderConfig(
             provider_name=str(item.get("provider_name", "DeepSeek")),
@@ -418,9 +456,9 @@ def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(last_message)
 
 
-def submit_case(payload: dict[str, Any]) -> dict[str, Any]:
-    settings = load_settings()
-    profile = load_profile()
+def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+    settings = load_settings(username)
+    profile = load_profile(username)
     main_text = str(payload.get("case_summary", "")).strip()
     if not main_text:
         raise ValueError("请先输入病例摘要。")
@@ -452,10 +490,10 @@ def submit_case(payload: dict[str, Any]) -> dict[str, Any]:
         consensus_score=session.consensus_score,
     )
 
-    sessions = [session] + load_sessions()
-    history = [history_item] + load_history()
-    save_sessions(sessions)
-    save_history(history)
+    sessions = [session] + load_sessions(username)
+    history = [history_item] + load_history(username)
+    save_sessions(username, sessions)
+    save_history(username, history)
 
     return {
         "session": serialize_session(session),
@@ -467,8 +505,8 @@ def submit_case(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_session(session_id: str) -> CaseSessionRecord | None:
-    for session in load_sessions():
+def get_session(username: str, session_id: str) -> CaseSessionRecord | None:
+    for session in load_sessions(username):
         if session.session_id == session_id:
             return session
     return None
@@ -503,8 +541,8 @@ def serialize_session(session: CaseSessionRecord, *, include_details: bool = Tru
     return payload
 
 
-def update_session_sidebar_visibility(*, show_in_sidebar: bool, session_id: str | None = None, apply_to_all: bool = False) -> list[CaseSessionRecord]:
-    sessions = load_sessions()
+def update_session_sidebar_visibility(username: str, *, show_in_sidebar: bool, session_id: str | None = None, apply_to_all: bool = False) -> list[CaseSessionRecord]:
+    sessions = load_sessions(username)
     changed = False
 
     if apply_to_all:
@@ -525,20 +563,83 @@ def update_session_sidebar_visibility(*, show_in_sidebar: bool, session_id: str 
             raise ValueError("未找到对应会诊记录。")
 
     if changed:
-        save_sessions(sessions)
+        save_sessions(username, sessions)
     return sessions
 
 
-def get_bootstrap_payload() -> dict[str, Any]:
-    profile = load_profile()
-    settings = load_settings()
-    history = load_history()
-    sessions = load_sessions()
+def _recent_query_summaries(username: str, limit: int = 3) -> list[dict[str, Any]]:
+    return [
+        {
+            "session_id": session.session_id,
+            "title": session.title,
+            "timestamp": session.timestamp,
+            "summary": session.summary,
+        }
+        for session in load_sessions(username)[:limit]
+    ]
+
+
+def summarize_account(account: dict[str, Any]) -> dict[str, Any]:
+    username = account["username"]
+    ensure_storage(username)
+    profile = load_profile(username)
+    sessions = load_sessions(username)
     return {
+        **serialize_auth_user(account),
+        "display_name": profile.user_name,
+        "title": profile.title,
+        "hospital_name": profile.hospital_name,
+        "department": profile.department,
+        "query_count": len(sessions),
+        "last_query_at": sessions[0].timestamp if sessions else "",
+        "recent_queries": _recent_query_summaries(username),
+    }
+
+
+def list_account_summaries() -> list[dict[str, Any]]:
+    accounts = sorted(load_accounts(), key=lambda item: (not bool(item.get("is_admin")), item.get("username", "")))
+    return [summarize_account(account) for account in accounts]
+
+
+def create_managed_account(payload: dict[str, Any]) -> dict[str, Any]:
+    account = create_auth_account(
+        str(payload.get("username", "")),
+        str(payload.get("password", "")),
+        is_admin=bool(payload.get("is_admin", False)),
+    )
+    ensure_storage(account["username"])
+    profile = load_profile(account["username"])
+    if profile.user_name == "演示医生":
+        profile.user_name = account["username"]
+        save_profile(account["username"], profile)
+    return summarize_account(account)
+
+
+def update_managed_account(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+    account = set_auth_account_disabled(username, bool(payload.get("disabled", False)))
+    return summarize_account(account)
+
+
+def delete_managed_account(username: str) -> None:
+    delete_auth_account(username)
+
+
+def get_bootstrap_payload(current_user: dict[str, Any]) -> dict[str, Any]:
+    username = current_user["username"]
+    profile = load_profile(username)
+    settings = load_settings(username)
+    history = load_history(username)
+    sessions = load_sessions(username)
+    settings_menu = list(BASE_SETTINGS_MENU)
+    if current_user.get("is_admin"):
+        settings_menu.append(ADMIN_SETTINGS_MENU_ITEM)
+    return {
+        "current_user": serialize_auth_user(current_user),
         "profile": asdict(profile),
         "settings": asdict(settings),
         "history": [serialize_history_item(item, f"history-{index}") for index, item in enumerate(history, start=1)],
         "sessions": [serialize_session(session, include_details=False) for session in sessions],
+        "admin_accounts": list_account_summaries() if current_user.get("is_admin") else [],
         "meta": {
             "departments": DEPARTMENTS,
             "topologies": TOPOLOGIES,
@@ -547,7 +648,7 @@ def get_bootstrap_payload() -> dict[str, Any]:
             "sex_options": SEX_OPTIONS,
             "insurance_options": INSURANCE_OPTIONS,
             "settings_sections": SETTINGS_SECTIONS,
-            "settings_menu": SETTINGS_MENU,
+            "settings_menu": settings_menu,
             "provider_presets": PROVIDER_PRESETS,
             "role_templates": ROLE_TEMPLATES,
             "labels": {

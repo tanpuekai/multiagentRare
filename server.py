@@ -6,12 +6,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from rare_agents.auth import authenticate_token, login_user, revoke_session_token
 from rare_agents.intake_parser import parse_ehr_intake
 from rare_agents.service import (
     DEPARTMENTS,
     OUTPUT_STYLES,
+    create_managed_account,
+    delete_managed_account,
     get_bootstrap_payload,
     get_session,
+    list_account_summaries,
     load_settings,
     profile_from_payload,
     save_profile,
@@ -20,6 +24,7 @@ from rare_agents.service import (
     settings_from_payload,
     submit_case,
     test_provider_connection,
+    update_managed_account,
     update_session_sidebar_visibility,
 )
 
@@ -33,19 +38,59 @@ app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="asset
 app.mount("/vendor", StaticFiles(directory=FRONTEND_DIR / "vendor"), name="vendor")
 
 
+def _bearer_token(request: Request) -> str:
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        return header[7:].strip()
+    return ""
+
+
+def require_user(request: Request) -> dict:
+    account = authenticate_token(_bearer_token(request))
+    if not account:
+        raise HTTPException(status_code=401, detail="请先登录。")
+    return account
+
+
+def require_admin(request: Request) -> dict:
+    account = require_user(request)
+    if not account.get("is_admin"):
+        raise HTTPException(status_code=403, detail="需要管理员权限。")
+    return account
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/auth/login")
+async def login(request: Request) -> dict:
+    payload = await request.json()
+    try:
+        token, user = login_user(str(payload.get("username", "")), str(payload.get("password", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"token": token, "user": user}
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request) -> dict[str, bool]:
+    token = _bearer_token(request)
+    if token:
+        revoke_session_token(token)
+    return {"ok": True}
+
+
 @app.get("/api/bootstrap")
-def bootstrap() -> dict:
-    return get_bootstrap_payload()
+def bootstrap(request: Request) -> dict:
+    return get_bootstrap_payload(require_user(request))
 
 
 @app.get("/api/sessions/{session_id}")
-def session_detail(session_id: str) -> dict:
-    session = get_session(session_id)
+def session_detail(session_id: str, request: Request) -> dict:
+    user = require_user(request)
+    session = get_session(user["username"], session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"session": serialize_session(session)}
@@ -53,33 +98,37 @@ def session_detail(session_id: str) -> dict:
 
 @app.post("/api/intake/prefill")
 async def intake_prefill(request: Request) -> dict:
+    user = require_user(request)
     payload = await request.json()
     case_summary = str(payload.get("case_summary", "")).strip()
     if not case_summary:
         raise HTTPException(status_code=400, detail="请先输入病例摘要。")
-    settings = load_settings()
+    settings = load_settings(user["username"])
     prefill = parse_ehr_intake(case_summary, settings.default_department)
     return {"prefill": prefill.__dict__}
 
 
 @app.put("/api/profile")
 async def update_profile(request: Request) -> dict:
+    user = require_user(request)
     payload = await request.json()
-    profile = profile_from_payload(payload)
-    save_profile(profile)
+    profile = profile_from_payload(user["username"], payload)
+    save_profile(user["username"], profile)
     return {"profile": profile.__dict__}
 
 
 @app.put("/api/settings")
 async def update_settings(request: Request) -> dict:
+    user = require_user(request)
     payload = await request.json()
-    settings = settings_from_payload(payload)
-    save_settings(settings)
+    settings = settings_from_payload(user["username"], payload)
+    save_settings(user["username"], settings)
     return {"settings": settings.__dict__}
 
 
 @app.post("/api/providers/test")
 async def test_provider(request: Request) -> dict:
+    require_user(request)
     payload = await request.json()
     try:
         return test_provider_connection(payload)
@@ -89,9 +138,11 @@ async def test_provider(request: Request) -> dict:
 
 @app.put("/api/sessions/sidebar-visibility")
 async def update_session_visibility(request: Request) -> dict:
+    user = require_user(request)
     payload = await request.json()
     try:
         sessions = update_session_sidebar_visibility(
+            user["username"],
             show_in_sidebar=bool(payload.get("show_in_sidebar", True)),
             session_id=str(payload.get("session_id", "")).strip() or None,
             apply_to_all=bool(payload.get("apply_to_all", False)),
@@ -101,11 +152,54 @@ async def update_session_visibility(request: Request) -> dict:
     return {"sessions": [serialize_session(session, include_details=False) for session in sessions]}
 
 
-@app.post("/api/diagnose")
-async def diagnose(request: Request) -> dict:
+@app.get("/api/admin/accounts")
+def admin_accounts(request: Request) -> dict:
+    require_admin(request)
+    return {"accounts": list_account_summaries()}
+
+
+@app.post("/api/admin/accounts")
+async def admin_create_account(request: Request) -> dict:
+    require_admin(request)
     payload = await request.json()
     try:
-        return submit_case(payload)
+        account = create_managed_account(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"account": account, "accounts": list_account_summaries()}
+
+
+@app.put("/api/admin/accounts/{username}")
+async def admin_update_account(username: str, request: Request) -> dict:
+    admin = require_admin(request)
+    if username.strip().lower() == str(admin.get("username", "")).lower():
+        raise HTTPException(status_code=400, detail="不能停用当前登录账户。")
+    payload = await request.json()
+    try:
+        account = update_managed_account(username, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"account": account, "accounts": list_account_summaries()}
+
+
+@app.delete("/api/admin/accounts/{username}")
+def admin_delete_account(username: str, request: Request) -> dict:
+    admin = require_admin(request)
+    if username.strip().lower() == str(admin.get("username", "")).lower():
+        raise HTTPException(status_code=400, detail="不能删除当前登录账户。")
+    try:
+        delete_managed_account(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"accounts": list_account_summaries()}
+
+
+@app.post("/api/diagnose")
+async def diagnose(request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return submit_case(user["username"], payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

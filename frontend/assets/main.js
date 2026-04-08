@@ -12,10 +12,14 @@
     settings: "M12 3.25h.32a1.6 1.6 0 0 1 1.58 1.37l.22 1.51c.46.14.9.33 1.31.54l1.24-.83a1.6 1.6 0 0 1 2.08.18l.23.23a1.6 1.6 0 0 1 .18 2.08l-.83 1.24c.21.41.4.85.54 1.31l1.51.22A1.6 1.6 0 0 1 20.75 12v.32a1.6 1.6 0 0 1-1.37 1.58l-1.51.22c-.14.46-.33.9-.54 1.31l.83 1.24a1.6 1.6 0 0 1-.18 2.08l-.23.23a1.6 1.6 0 0 1-2.08.18l-1.24-.83c-.41.21-.85.4-1.31.54l-.22 1.51a1.6 1.6 0 0 1-1.58 1.37H12a1.6 1.6 0 0 1-1.58-1.37l-.22-1.51a6.7 6.7 0 0 1-1.31-.54l-1.24.83a1.6 1.6 0 0 1-2.08-.18l-.23-.23a1.6 1.6 0 0 1-.18-2.08l.83-1.24a6.7 6.7 0 0 1-.54-1.31l-1.51-.22A1.6 1.6 0 0 1 3.25 12.32V12a1.6 1.6 0 0 1 1.37-1.58l1.51-.22c.14-.46.33-.9.54-1.31l-.83-1.24a1.6 1.6 0 0 1 .18-2.08l.23-.23a1.6 1.6 0 0 1 2.08-.18l1.24.83c.41-.21.85-.4 1.31-.54l.22-1.51A1.6 1.6 0 0 1 12 3.25zm0 5.15a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2z",
     history: "M12 8v5l3 2M12 3a9 9 0 1 0 9 9",
     account: "M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2-7 4.5V20h14v-1.5C19 16 16 14 12 14z",
+    users: "M16 11a3 3 0 1 0-2.999-3A3 3 0 0 0 16 11zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.9 0-5 1.45-5 3.5V20h10v-2.5C13 15.45 10.9 14 8 14zm8 0c-.66 0-1.28.08-1.86.22 1.15.7 1.86 1.72 1.86 3.28V20h5v-2.1c0-2.15-2.07-3.9-5-3.9z",
     hub: "M12 3v4M5 8l3 2M19 8l-3 2M12 21v-4M5 16l3-2M19 16l-3-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
     spark: "M12 3l1.8 4.8L18 9.6l-4.2 1.2L12 15.6l-1.8-4.8L6 9.6l4.2-1.8z",
     chevronLeft: "M15 6 9 12l6 6",
+    logout: "M15 17l5-5-5-5M20 12H9M11 19H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5",
   };
+
+  const AUTH_TOKEN_KEY = "raremdt.authToken";
 
   const SETTINGS_SECTION_COPY = {
     医生档案: {
@@ -30,12 +34,36 @@
       title: "会诊历史",
       copy: "查看既往会诊摘要，并可直接回到主工作区继续查看记录。",
     },
+    账户管理: {
+      title: "账户管理",
+      copy: "管理员可查看账户、查询概览，并增删或停用账户。",
+    },
   };
 
+  function readAuthToken() {
+    try {
+      return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function writeAuthToken(token) {
+    try {
+      if (token) {
+        window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+      } else {
+        window.localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+    } catch (error) {}
+  }
+
   async function fetchJson(url, options) {
+    const token = readAuthToken();
     const response = await fetch(url, {
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options && options.headers ? options.headers : {}),
       },
       ...options,
@@ -47,7 +75,12 @@
       payload = {};
     }
     if (!response.ok) {
-      throw new Error(payload.detail || "Request failed.");
+      if (response.status === 401) {
+        writeAuthToken("");
+      }
+      const error = new Error(payload.detail || "Request failed.");
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -131,10 +164,12 @@
   function Sidebar({
     meta,
     profile,
+    currentUser,
     sessions,
     currentSessionId,
     onOpenSession,
     onOpenSettings,
+    onLogout,
     settingsMenuOpen,
     onToggleSettingsMenu,
   }) {
@@ -180,7 +215,9 @@
             <div className="sidebar-head">
               <div>
                 <div className="sidebar-footer-name">${profile?.user_name || ""}</div>
-                <div className="sidebar-footer-copy">${profile?.title || ""} · ${label(meta, "department", profile?.department)}</div>
+                <div className="sidebar-footer-copy">
+                  ${currentUser?.username || ""}${profile?.title ? ` · ${profile.title}` : ""}${profile?.department ? ` · ${label(meta, "department", profile.department)}` : ""}
+                </div>
               </div>
               <button className=${cx("ghost-icon-button", settingsMenuOpen && "is-active")} onClick=${onToggleSettingsMenu} aria-label="Settings menu">
                 <${Icon} name="settings" size=${22} />
@@ -204,6 +241,14 @@
                     </button>
                   `
                 )}
+                <div className="menu-divider"></div>
+                <button className="menu-item danger-menu-item" onClick=${onLogout}>
+                  <${Icon} name="logout" size=${18} />
+                  <div>
+                    <div className="sidebar-footer-name">退出登录</div>
+                    <div className="menu-item-copy">返回登录页面</div>
+                  </div>
+                </button>
               </div>
             `}
           </div>
@@ -681,6 +726,144 @@
     `;
   }
 
+  function LoginScreen({ draft, setDraft, onSubmit, isSubmitting }) {
+    function update(key, value) {
+      setDraft((current) => ({ ...current, [key]: value }));
+    }
+
+    return html`
+      <div className="login-shell">
+        <div className="login-card">
+          <div className="login-brand">
+            <div className="brand-mark">R</div>
+            <div>
+              <div className="brand-name">RareMDT</div>
+              <div className="brand-copy">罕见病多智能体诊疗系统</div>
+            </div>
+          </div>
+
+          <div>
+            <div className="settings-title">登录工作台</div>
+            <div className="settings-copy">使用账号进入会诊工作区，管理员可在登录后管理用户与查询概览。</div>
+          </div>
+
+          <div className="settings-content">
+            <label className="field">
+              <span className="field-label">用户名</span>
+              <input value=${draft.username} onChange=${(event) => update("username", event.target.value)} onKeyDown=${(event) => event.key === "Enter" && onSubmit()} />
+            </label>
+            <label className="field">
+              <span className="field-label">密码</span>
+              <input type="password" value=${draft.password} onChange=${(event) => update("password", event.target.value)} onKeyDown=${(event) => event.key === "Enter" && onSubmit()} />
+            </label>
+          </div>
+
+          <button className="primary-button login-button" onClick=${onSubmit} disabled=${isSubmitting}>
+            ${isSubmitting ? "登录中..." : "登录"}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function AdminAccountsPage({
+    accounts,
+    draft,
+    setDraft,
+    onCreate,
+    onToggleDisabled,
+    onDelete,
+    currentUsername,
+    isMutating,
+  }) {
+    function update(key, value) {
+      setDraft((current) => ({ ...current, [key]: value }));
+    }
+
+    return html`
+      <div className="settings-content">
+        <div className="account-create-card">
+          <div className="config-card-head">
+            <div className="config-card-title">新增账户</div>
+          </div>
+          <div className="form-grid wide">
+            <label className="field">
+              <span className="field-label">用户名</span>
+              <input value=${draft.username} onChange=${(event) => update("username", event.target.value)} />
+            </label>
+            <label className="field">
+              <span className="field-label">密码</span>
+              <input type="password" value=${draft.password} onChange=${(event) => update("password", event.target.value)} />
+            </label>
+            <button className=${cx("toggle-pill", draft.is_admin && "is-on")} onClick=${() => update("is_admin", !draft.is_admin)} style=${{ alignSelf: "end", marginBottom: "2px" }}>
+              <span className="toggle-switch"></span>
+              管理员
+            </button>
+          </div>
+          <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "16px" }}>
+            <button className="primary-button" onClick=${onCreate} disabled=${isMutating}>创建账户</button>
+          </div>
+        </div>
+
+        <div className="card-list">
+          ${accounts.length
+            ? accounts.map(
+                (account) => html`
+                  <div key=${account.username} className="account-card">
+                    <div className="config-card-head">
+                      <div>
+                        <div className="config-card-title">${account.display_name || account.username}</div>
+                        <div className="sidebar-item-meta">@${account.username}${account.hospital_name ? ` · ${account.hospital_name}` : ""}</div>
+                      </div>
+                      <div className="badge-row">
+                        ${account.is_admin && html`<span className="badge">管理员</span>`}
+                        <span className="badge">${account.disabled ? "已停用" : "启用中"}</span>
+                        <span className="badge">${account.query_count} 条查询</span>
+                      </div>
+                    </div>
+
+                    <div className="account-meta-row">
+                      <div className="sidebar-item-meta">创建时间: ${formatTimestamp(account.created_at)}</div>
+                      <div className="sidebar-item-meta">最近查询: ${account.last_query_at ? formatTimestamp(account.last_query_at) : "暂无"}</div>
+                    </div>
+
+                    <div className="recent-query-list">
+                      ${account.recent_queries?.length
+                        ? account.recent_queries.map(
+                            (query) => html`
+                              <div key=${`${account.username}-${query.session_id}`} className="recent-query-item">
+                                <div className="sidebar-footer-name">${query.title}</div>
+                                <div className="sidebar-item-meta">${formatTimestamp(query.timestamp)}</div>
+                              </div>
+                            `
+                          )
+                        : html`<div className="sidebar-item-meta">暂无查询记录。</div>`}
+                    </div>
+
+                    <div className="config-card-actions" style=${{ justifyContent: "flex-end" }}>
+                      <button
+                        className="secondary-button"
+                        onClick=${() => onToggleDisabled(account.username, !account.disabled)}
+                        disabled=${isMutating || account.username === currentUsername}
+                      >
+                        ${account.disabled ? "启用" : "停用"}
+                      </button>
+                      ${account.username !== currentUsername &&
+                      html`
+                        <button className="subtle-button danger-button" onClick=${() => onDelete(account.username)} disabled=${isMutating}>
+                          删除
+                        </button>
+                      `}
+                    </div>
+                  </div>
+                `
+              )
+            : html`<div className="sidebar-item-meta">暂无账户。</div>`}
+        </div>
+      </div>
+    `;
+  }
+
   function ProfileSettings({ meta, draft, setDraft }) {
     function update(key, value) {
       setDraft((current) => ({ ...current, [key]: value }));
@@ -978,6 +1161,14 @@
     historyPreviewSession,
     isHistoryPreviewLoading,
     onCloseHistoryPreview,
+    adminAccounts,
+    accountDraft,
+    setAccountDraft,
+    onCreateAccount,
+    onToggleAccountDisabled,
+    onDeleteAccount,
+    currentUser,
+    isAccountMutating,
   }) {
     const sectionMeta = SETTINGS_SECTION_COPY[section];
 
@@ -1030,12 +1221,27 @@
             onBack=${onCloseHistoryPreview}
           />
         `}
+
+        ${section === "账户管理" &&
+        html`
+          <${AdminAccountsPage}
+            accounts=${adminAccounts}
+            draft=${accountDraft}
+            setDraft=${setAccountDraft}
+            onCreate=${onCreateAccount}
+            onToggleDisabled=${onToggleAccountDisabled}
+            onDelete=${onDeleteAccount}
+            currentUsername=${currentUser?.username}
+            isMutating=${isAccountMutating}
+          />
+        `}
       </div>
     `;
   }
 
   function App() {
     const [bootstrapping, setBootstrapping] = useState(true);
+    const [currentUser, setCurrentUser] = useState(null);
     const [profile, setProfile] = useState(null);
     const [settings, setSettings] = useState(null);
     const [meta, setMeta] = useState(null);
@@ -1051,10 +1257,15 @@
     const [composer, setComposer] = useState(makeDefaultComposer());
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
+    const [isAccountMutating, setIsAccountMutating] = useState(false);
     const [testingProviderIndex, setTestingProviderIndex] = useState(null);
     const [visibilityBusyKey, setVisibilityBusyKey] = useState(null);
     const [historyPreviewSession, setHistoryPreviewSession] = useState(null);
     const [isHistoryPreviewLoading, setIsHistoryPreviewLoading] = useState(false);
+    const [loginDraft, setLoginDraft] = useState({ username: "", password: "" });
+    const [adminAccounts, setAdminAccounts] = useState([]);
+    const [accountDraft, setAccountDraft] = useState({ username: "", password: "", is_admin: false });
     const [notices, setNotices] = useState([]);
 
     function pushNotice(message, kind = "success") {
@@ -1063,6 +1274,35 @@
       window.setTimeout(() => {
         setNotices((current) => current.filter((item) => item.id !== id));
       }, 2800);
+    }
+
+    function resetAppState() {
+      setCurrentUser(null);
+      setProfile(null);
+      setSettings(null);
+      setMeta(null);
+      setSessions([]);
+      setCurrentSession(null);
+      setProfileDraft(null);
+      setSettingsDraft(null);
+      setAdminAccounts([]);
+      setActiveView("workspace");
+      setSettingsSection("医生档案");
+      setSettingsMenuOpen(false);
+      setDiagnosticsOpen(false);
+      setHistoryPreviewSession(null);
+      setIsHistoryPreviewLoading(false);
+      setComposer(makeDefaultComposer());
+    }
+
+    function handleAuthError(error) {
+      if (error?.status !== 401) {
+        return false;
+      }
+      writeAuthToken("");
+      resetAppState();
+      setBootstrapping(false);
+      return true;
     }
 
     function applySessionList(nextSessions) {
@@ -1083,9 +1323,16 @@
     }
 
     async function bootstrap() {
+      const token = readAuthToken();
+      if (!token) {
+        resetAppState();
+        setBootstrapping(false);
+        return;
+      }
       setBootstrapping(true);
       try {
         const data = await fetchJson("/api/bootstrap");
+        setCurrentUser(data.current_user || null);
         setProfile(data.profile);
         setSettings(data.settings);
         setMeta(data.meta);
@@ -1093,8 +1340,11 @@
         setProfileDraft(cloneData(data.profile));
         setSettingsDraft(cloneData(data.settings));
         setComposer(makeDefaultComposer(data.meta, data.settings));
+        setAdminAccounts(data.admin_accounts || []);
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setBootstrapping(false);
       }
@@ -1115,6 +1365,38 @@
       return () => window.removeEventListener("keydown", handleKeydown);
     }, []);
 
+    async function login() {
+      if (!loginDraft.username.trim() || !loginDraft.password) {
+        pushNotice("请输入用户名和密码。", "error");
+        return;
+      }
+      setIsLoggingIn(true);
+      try {
+        const data = await fetchJson("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify(loginDraft),
+        });
+        writeAuthToken(data.token);
+        setLoginDraft({ username: loginDraft.username.trim(), password: "" });
+        await bootstrap();
+        pushNotice("已登录。");
+      } catch (error) {
+        pushNotice(error.message, "error");
+      } finally {
+        setIsLoggingIn(false);
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetchJson("/api/auth/logout", { method: "POST" });
+      } catch (error) {}
+      writeAuthToken("");
+      resetAppState();
+      setBootstrapping(false);
+      pushNotice("已退出登录。");
+    }
+
     async function openSession(sessionId) {
       try {
         const data = await fetchJson(`/api/sessions/${sessionId}`);
@@ -1123,7 +1405,9 @@
         setDiagnosticsOpen(false);
         setSettingsMenuOpen(false);
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       }
     }
 
@@ -1133,7 +1417,9 @@
         const data = await fetchJson(`/api/sessions/${sessionId}`);
         setHistoryPreviewSession(data.session);
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setIsHistoryPreviewLoading(false);
       }
@@ -1199,7 +1485,9 @@
         setActiveView("workspace");
         pushNotice("会诊已生成。");
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setIsSubmitting(false);
       }
@@ -1217,7 +1505,9 @@
         setProfileDraft(cloneData(data.profile));
         pushNotice("账户已保存。");
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setIsSaving(false);
       }
@@ -1239,7 +1529,9 @@
         }));
         pushNotice("设置已保存。");
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setIsSaving(false);
       }
@@ -1259,7 +1551,9 @@
         });
         pushNotice(data.message || `${provider.provider_name} 接口可用。`);
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setTestingProviderIndex(null);
       }
@@ -1278,7 +1572,9 @@
         applySessionList(data.sessions || []);
         pushNotice(showInSidebar ? "已显示在侧栏。" : "已从侧栏隐藏。");
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setVisibilityBusyKey(null);
       }
@@ -1297,9 +1593,72 @@
         applySessionList(data.sessions || []);
         pushNotice(showInSidebar ? "已将全部记录显示到侧栏。" : "已将全部记录从侧栏隐藏。");
       } catch (error) {
-        pushNotice(error.message, "error");
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       } finally {
         setVisibilityBusyKey(null);
+      }
+    }
+
+    async function createAccount() {
+      if (!accountDraft.username.trim() || !accountDraft.password) {
+        pushNotice("请填写新账户的用户名和密码。", "error");
+        return;
+      }
+      setIsAccountMutating(true);
+      try {
+        const data = await fetchJson("/api/admin/accounts", {
+          method: "POST",
+          body: JSON.stringify(accountDraft),
+        });
+        setAdminAccounts(data.accounts || []);
+        setAccountDraft({ username: "", password: "", is_admin: false });
+        pushNotice("账户已创建。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
+      } finally {
+        setIsAccountMutating(false);
+      }
+    }
+
+    async function toggleAccountDisabled(username, disabled) {
+      setIsAccountMutating(true);
+      try {
+        const data = await fetchJson(`/api/admin/accounts/${username}`, {
+          method: "PUT",
+          body: JSON.stringify({ disabled }),
+        });
+        setAdminAccounts(data.accounts || []);
+        pushNotice(disabled ? "账户已停用。" : "账户已启用。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
+      } finally {
+        setIsAccountMutating(false);
+      }
+    }
+
+    async function deleteAccount(username) {
+      if (!window.confirm(`确定删除账户 @${username} 吗？`)) {
+        return;
+      }
+      setIsAccountMutating(true);
+      try {
+        const data = await fetchJson(`/api/admin/accounts/${username}`, {
+          method: "DELETE",
+        });
+        setAdminAccounts(data.accounts || []);
+        pushNotice("账户已删除。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
+      } finally {
+        setIsAccountMutating(false);
       }
     }
 
@@ -1310,7 +1669,28 @@
       [currentSession]
     );
 
-    if (bootstrapping || !meta || !profile || !settings || !profileDraft || !settingsDraft) {
+    if (bootstrapping) {
+      return html`
+        <div className="loading-screen">
+          <div className="loading-card">
+            <div className="loading-pulse"></div>
+            <div className="result-title">RareMDT</div>
+            <div className="result-summary">正在加载新的工作区界面与会诊数据。</div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (!currentUser) {
+      return html`
+        <div>
+          <${NoticeStack} notices=${notices} />
+          <${LoginScreen} draft=${loginDraft} setDraft=${setLoginDraft} onSubmit=${login} isSubmitting=${isLoggingIn} />
+        </div>
+      `;
+    }
+
+    if (!meta || !profile || !settings || !profileDraft || !settingsDraft) {
       return html`
         <div className="loading-screen">
           <div className="loading-card">
@@ -1329,10 +1709,12 @@
         <${Sidebar}
           meta=${meta}
           profile=${profile}
+          currentUser=${currentUser}
           sessions=${sessions}
           currentSessionId=${currentSession?.session_id}
           onOpenSession=${openSession}
           onOpenSettings=${openSettings}
+          onLogout=${logout}
           settingsMenuOpen=${settingsMenuOpen}
           onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
         />
@@ -1381,6 +1763,14 @@
                     historyPreviewSession=${historyPreviewSession}
                     isHistoryPreviewLoading=${isHistoryPreviewLoading}
                     onCloseHistoryPreview=${closeHistoryPreview}
+                    adminAccounts=${adminAccounts}
+                    accountDraft=${accountDraft}
+                    setAccountDraft=${setAccountDraft}
+                    onCreateAccount=${createAccount}
+                    onToggleAccountDisabled=${toggleAccountDisabled}
+                    onDeleteAccount=${deleteAccount}
+                    currentUser=${currentUser}
+                    isAccountMutating=${isAccountMutating}
                   />
                 `
               : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}

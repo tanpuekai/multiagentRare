@@ -14410,3 +14410,353 @@ INFO:     connection closed
 INFO:     127.0.0.1:51094 - "WebSocket /_stcore/stream" 403
 INFO:     connection failed (403 Forbidden)
 INFO:     connection closed
+INFO:     127.0.0.1:51149 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51171 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51217 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51239 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51290 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51319 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51370 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51415 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51444 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51459 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51516 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51567 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51603 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51632 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51699 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51742 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51781 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51825 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51864 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:51879 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52011 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52039 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52070 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52144 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52159 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52202 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52229 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52276 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52305 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52384 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52413 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52456 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52495 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52556 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52606 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52656 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52679 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52713 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52738 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52789 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52802 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52856 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52905 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52930 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:52985 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53017 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53042 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53062 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53126 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53188 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53245 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53277 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53344 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53370 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53383 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53432 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53446 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53483 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53544 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53634 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53675 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53749 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53807 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53816 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53857 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53901 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:53976 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54032 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54238 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54277 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54312 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54457 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54609 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54631 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54702 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54741 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54777 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54797 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54883 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54902 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:54994 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:55019 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:55084 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:55168 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:55229 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+WARNING:  StatReload detected changes in 'rare_agents/service.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [98609]
+INFO:     Started server process [18611]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'rare_agents/service.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [18611]
+INFO:     Started server process [18950]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'rare_agents/service.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [18950]
+INFO:     Started server process [19259]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'rare_agents/auth.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [19259]
+INFO:     Started server process [19574]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'server.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [19574]
+INFO:     Started server process [20056]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'rare_agents/service.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [20056]
+INFO:     Started server process [26542]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  StatReload detected changes in 'server.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [26542]
+INFO:     Started server process [26665]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:57178 - "POST /api/providers/test HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57178 - "POST /api/providers/test HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:60262 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60264 - "GET /vendor/htm.umd.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60262 - "GET /vendor/react-dom.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60266 - "GET /vendor/react.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60268 - "GET /vendor/purify.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60267 - "GET /vendor/marked.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60263 - "GET /assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60267 - "GET /assets/main.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60267 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60262 - "GET /vendor/react.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60267 - "GET /assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60264 - "GET /vendor/react-dom.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60266 - "GET /vendor/purify.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60263 - "GET /vendor/marked.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60268 - "GET /vendor/htm.umd.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60262 - "GET /assets/main.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60262 - "GET /favicon.ico HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60466 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60466 - "GET /api/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60819 - "POST /api/providers/test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60979 - "POST /api/providers/test HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:61151 - "POST /api/providers/test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "PUT /api/sessions/sidebar-visibility HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/0791d4a87b26 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/0791d4a87b26 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/0791d4a87b26 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63365 - "GET /api/sessions/history-3 HTTP/1.1" 200 OK
