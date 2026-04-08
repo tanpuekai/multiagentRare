@@ -145,8 +145,10 @@
         <div className="sidebar-inner">
           <div className="sidebar-brand">
             <div className="brand-mark">R</div>
-            <div className="brand-name">RareMDT</div>
-            <div className="brand-copy">罕见病多智能体诊疗系统</div>
+            <div className="brand-text">
+              <div className="brand-name">RareMDT</div>
+              <div className="brand-copy">罕见病多智能体诊疗系统</div>
+            </div>
           </div>
 
           <div className="sidebar-head">
