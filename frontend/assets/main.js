@@ -551,27 +551,33 @@
 
             <div className="composer-status">${composer.attachment_panel_open ? "附件面板已展开" : "Command + Enter 提交病例"}</div>
 
-            <button className=${cx("toggle-pill", composer.input_expanded && "is-on")} onClick=${() => updateField("input_expanded", !composer.input_expanded)}>
+            <button
+              className=${cx("toggle-pill", "tooltip-button", composer.input_expanded && "is-on")}
+              onClick=${() => updateField("input_expanded", !composer.input_expanded)}
+              data-tooltip="逐项输入"
+            >
               <span className="toggle-switch"></span>
               高级模式
             </button>
 
-            <button className="icon-button" onClick=${pasteFromClipboard} aria-label="Paste from clipboard">
+            <button className="icon-button tooltip-button" onClick=${pasteFromClipboard} aria-label="Paste from clipboard" data-tooltip="从剪贴板粘贴">
               <${Icon} name="paste" size=${18} />
             </button>
 
-            <button className="icon-button" onClick=${onReset} aria-label="Reset composer">
+            <button className="icon-button tooltip-button" onClick=${onReset} aria-label="Reset composer" data-tooltip="清空重置">
               <${Icon} name="reset" size=${18} />
             </button>
 
-            <button
-              className=${cx("send-button", hasInput && "is-ready")}
-              disabled=${!hasInput || isSubmitting}
-              onClick=${onSubmit}
-              aria-label="Submit case"
-            >
-              <${Icon} name="arrowUp" size=${18} />
-            </button>
+            <div className="tooltip-button" data-tooltip=${hasInput ? "提交" : "请填写病例内容"}>
+              <button
+                className=${cx("send-button", hasInput && "is-ready")}
+                disabled=${!hasInput || isSubmitting}
+                onClick=${onSubmit}
+                aria-label="Submit case"
+              >
+                <${Icon} name="arrowUp" size=${18} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
