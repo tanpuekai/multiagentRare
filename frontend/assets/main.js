@@ -717,6 +717,8 @@
   }
 
   function SettingsEditor({ meta, draft, setDraft, onTestProvider, testingProviderIndex }) {
+    const [configSection, setConfigSection] = useState("system");
+
     function updateRoot(key, value) {
       setDraft((current) => ({ ...current, [key]: value }));
     }
@@ -796,36 +798,95 @@
 
     return html`
       <div className="settings-content">
-        <div className="form-grid wide">
-          <label className="field">
-            <span className="field-label">编排拓扑</span>
-            <select value=${draft.orchestration_mode} onChange=${(event) => updateRoot("orchestration_mode", event.target.value)}>
-              ${meta.topologies.map((option) => html`<option key=${option} value=${option}>${label(meta, "topology", option)}</option>`)}
-            </select>
-          </label>
-          <label className="field">
-            <span className="field-label">默认科室</span>
-            <select value=${draft.default_department} onChange=${(event) => updateRoot("default_department", event.target.value)}>
-              ${meta.departments.map((option) => html`<option key=${option} value=${option}>${label(meta, "department", option)}</option>`)}
-            </select>
-          </label>
-          <label className="field">
-            <span className="field-label">共识阈值</span>
-            <input type="number" step="0.01" min="0.4" max="0.99" value=${draft.consensus_threshold} onChange=${(event) => updateRoot("consensus_threshold", Number(event.target.value))} />
-          </label>
-          <label className="field">
-            <span className="field-label">最大轮次</span>
-            <input type="number" min="1" max="8" value=${draft.max_rounds} onChange=${(event) => updateRoot("max_rounds", Number(event.target.value))} />
-          </label>
-          <button className=${cx("toggle-pill", draft.show_diagnostics && "is-on")} onClick=${() => updateRoot("show_diagnostics", !draft.show_diagnostics)} style=${{ alignSelf: "end", marginBottom: "2px" }}>
-            <span className="toggle-switch"></span>
-            默认显示诊断面板
+        <div className="settings-nav">
+          <button className=${cx("chip", configSection === "system" && "is-active")} onClick=${() => setConfigSection("system")}>
+            总体策略
+          </button>
+          <button className=${cx("chip", configSection === "roles" && "is-active")} onClick=${() => setConfigSection("roles")}>
+            Agent Roles
+          </button>
+          <button className=${cx("chip", configSection === "providers" && "is-active")} onClick=${() => setConfigSection("providers")}>
+            API Providers
           </button>
         </div>
 
-        <div className="config-card">
-          <div className="config-card-head">
-            <div className="config-card-title">API Providers</div>
+        ${configSection === "system" &&
+        html`
+          <div className="form-grid wide">
+            <label className="field">
+              <span className="field-label">编排拓扑</span>
+              <select value=${draft.orchestration_mode} onChange=${(event) => updateRoot("orchestration_mode", event.target.value)}>
+                ${meta.topologies.map((option) => html`<option key=${option} value=${option}>${label(meta, "topology", option)}</option>`)}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">默认科室</span>
+              <select value=${draft.default_department} onChange=${(event) => updateRoot("default_department", event.target.value)}>
+                ${meta.departments.map((option) => html`<option key=${option} value=${option}>${label(meta, "department", option)}</option>`)}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">共识阈值</span>
+              <input type="number" step="0.01" min="0.4" max="0.99" value=${draft.consensus_threshold} onChange=${(event) => updateRoot("consensus_threshold", Number(event.target.value))} />
+            </label>
+            <label className="field">
+              <span className="field-label">最大轮次</span>
+              <input type="number" min="1" max="8" value=${draft.max_rounds} onChange=${(event) => updateRoot("max_rounds", Number(event.target.value))} />
+            </label>
+            <button className=${cx("toggle-pill", draft.show_diagnostics && "is-on")} onClick=${() => updateRoot("show_diagnostics", !draft.show_diagnostics)} style=${{ alignSelf: "end", marginBottom: "2px" }}>
+              <span className="toggle-switch"></span>
+              默认显示诊断面板
+            </button>
+          </div>
+        `}
+
+        ${configSection === "roles" &&
+        html`
+          <div style=${{ display: "flex", justifyContent: "flex-end" }}>
+            <button className="secondary-button" onClick=${addRole}>
+              <${Icon} name="plus" size=${16} />
+              新增角色
+            </button>
+          </div>
+          <div className="card-list">
+            ${draft.agent_roles.map(
+              (role, index) => html`
+                <div key=${index} className="config-card">
+                  <div className="config-card-head">
+                    <div className="config-card-title">${label(meta, "role", role.role_name) || role.role_name}</div>
+                    <button className="subtle-button danger-button" onClick=${() => removeRole(index)}>移除</button>
+                  </div>
+                  <div className="form-grid wide">
+                    <label className="field">
+                      <span className="field-label">Role</span>
+                      <select value=${role.role_name} onChange=${(event) => updateRole(index, "role_name", event.target.value)}>
+                        ${meta.role_templates.map((option) => html`<option key=${option} value=${option}>${label(meta, "role", option)}</option>`)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Provider</span>
+                      <select value=${role.provider_name} onChange=${(event) => updateRole(index, "provider_name", event.target.value)}>
+                        ${draft.api_providers.map((provider) => html`<option key=${provider.provider_name} value=${provider.provider_name}>${provider.provider_name}</option>`)}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Agents</span>
+                      <input type="number" min="1" value=${role.agent_count} onChange=${(event) => updateRole(index, "agent_count", event.target.value)} />
+                    </label>
+                  </div>
+                  <label className="stack-field" style=${{ marginTop: "14px" }}>
+                    <span className="field-label">角色说明</span>
+                    <textarea value=${role.role_spec || ""} onChange=${(event) => updateRole(index, "role_spec", event.target.value)}></textarea>
+                  </label>
+                </div>
+              `
+            )}
+          </div>
+        `}
+
+        ${configSection === "providers" &&
+        html`
+          <div style=${{ display: "flex", justifyContent: "flex-end" }}>
             <button className="secondary-button" onClick=${addProvider}>
               <${Icon} name="plus" size=${16} />
               新增接口
@@ -882,51 +943,7 @@
               `
             )}
           </div>
-        </div>
-
-        <div className="config-card">
-          <div className="config-card-head">
-            <div className="config-card-title">Agent Roles</div>
-            <button className="secondary-button" onClick=${addRole}>
-              <${Icon} name="plus" size=${16} />
-              新增角色
-            </button>
-          </div>
-          <div className="card-list">
-            ${draft.agent_roles.map(
-              (role, index) => html`
-                <div key=${index} className="config-card">
-                  <div className="config-card-head">
-                    <div className="config-card-title">${label(meta, "role", role.role_name) || role.role_name}</div>
-                    <button className="subtle-button danger-button" onClick=${() => removeRole(index)}>移除</button>
-                  </div>
-                  <div className="form-grid wide">
-                    <label className="field">
-                      <span className="field-label">Role</span>
-                      <select value=${role.role_name} onChange=${(event) => updateRole(index, "role_name", event.target.value)}>
-                        ${meta.role_templates.map((option) => html`<option key=${option} value=${option}>${label(meta, "role", option)}</option>`)}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span className="field-label">Provider</span>
-                      <select value=${role.provider_name} onChange=${(event) => updateRole(index, "provider_name", event.target.value)}>
-                        ${draft.api_providers.map((provider) => html`<option key=${provider.provider_name} value=${provider.provider_name}>${provider.provider_name}</option>`)}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span className="field-label">Agents</span>
-                      <input type="number" min="1" value=${role.agent_count} onChange=${(event) => updateRole(index, "agent_count", event.target.value)} />
-                    </label>
-                  </div>
-                  <label className="stack-field" style=${{ marginTop: "14px" }}>
-                    <span className="field-label">角色说明</span>
-                    <textarea value=${role.role_spec || ""} onChange=${(event) => updateRole(index, "role_spec", event.target.value)}></textarea>
-                  </label>
-                </div>
-              `
-            )}
-          </div>
-        </div>
+        `}
       </div>
     `;
   }
