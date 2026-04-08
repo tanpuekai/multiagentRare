@@ -1730,9 +1730,13 @@
                 <div className="topbar-copy">${currentCopy}</div>
               </div>
               <div className="topbar-actions">
-                <button className=${cx("chip", diagnosticsOpen && "is-active")} onClick=${() => setDiagnosticsOpen(true)}>
-                  <${Icon} name="hub" size=${16} />
-                  诊断面板
+                <button
+                  className=${cx("ghost-icon-button", "tooltip-button", diagnosticsOpen && "is-active")}
+                  onClick=${() => setDiagnosticsOpen(true)}
+                  aria-label="诊断面板"
+                  data-tooltip="诊断面板"
+                >
+                  <${Icon} name="hub" size=${18} />
                 </button>
               </div>
             </div>

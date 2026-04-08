@@ -579,10 +579,10 @@ a {
   display: flex;
   flex-direction: column;
   border-radius: 34px;
-  background: var(--bg-shell);
-  border: 1px solid rgba(255,255,255,0.7);
-  box-shadow: var(--shadow-shell);
-  backdrop-filter: blur(24px);
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  backdrop-filter: none;
   overflow: hidden;
 }
 
