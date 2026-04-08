@@ -114,6 +114,8 @@ a {
   transform: none;
   opacity: 1;
   pointer-events: auto;
+  overflow: visible;
+  z-index: 24;
 }
 
 .sidebar-inner {
@@ -129,6 +131,7 @@ a {
   align-items: center;
   gap: 14px;
   padding: 18px 10px;
+  overflow: visible;
 }
 
 .sidebar-toolbar {
@@ -542,6 +545,8 @@ a {
   border-color: transparent;
   display: flex;
   justify-content: center;
+  overflow: visible;
+  z-index: 26;
 }
 
 .app-shell.sidebar-collapsed .sidebar-footer .sidebar-head {
@@ -621,12 +626,12 @@ a {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  border-radius: 34px;
+  border-radius: 0;
   background: transparent;
   border: 1px solid transparent;
   box-shadow: none;
   backdrop-filter: none;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .workspace-region {
@@ -652,6 +657,7 @@ a {
   min-width: 0;
   min-height: 0;
   display: flex;
+  background: transparent;
 }
 
 .diagnostics-toggle-button {
@@ -750,6 +756,7 @@ a {
   min-height: 0;
   overflow: auto;
   padding: 0 24px 212px;
+  background: transparent;
 }
 
 .workspace-feed {
@@ -969,7 +976,7 @@ a {
   min-width: 0;
   height: 100%;
   margin: -20px -20px -20px 0;
-  border-radius: 30px;
+  border-radius: 0;
   background: transparent;
   border: 1px solid transparent;
   box-shadow: none;
@@ -1333,12 +1340,12 @@ a {
   right: 24px;
   bottom: 22px;
   z-index: 8;
-  border-radius: 30px;
-  background: rgba(255,255,255,0.92);
-  border: 1px solid rgba(255,255,255,0.86);
-  box-shadow: var(--shadow-shell);
-  backdrop-filter: blur(28px);
-  overflow: hidden;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
 }
 
 .composer-body {
@@ -1622,7 +1629,7 @@ a {
   }
 
   .shell-main {
-    border-radius: 26px;
+    border-radius: 0;
   }
 
   .diagnostics-toggle-button {
