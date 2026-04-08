@@ -6,6 +6,7 @@
     plus: "M12 5v14M5 12h14",
     paste: "M16 4h-2.2a2.8 2.8 0 0 0-5.6 0H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm-5-1a1.5 1.5 0 0 1 1.5 1.5h-3A1.5 1.5 0 0 1 11 3zm5 17H6V6h1.5v1.5h7V6H16v14z",
     reset: "M3 12a9 9 0 1 0 3-6.708M3 4v5h5",
+    pulse: "M3 12h4l2.4-4.5 4.2 9 2.3-4.5H21",
     arrowUp: "M12 19V5M6 11l6-6 6 6",
     close: "M6 6l12 12M18 6 6 18",
     settings: "M12 8.6A3.4 3.4 0 1 0 12 15.4 3.4 3.4 0 0 0 12 8.6zm8 3.4-1.86-.62a6.77 6.77 0 0 0-.54-1.3l.88-1.74-1.7-1.7-1.75.88a6.78 6.78 0 0 0-1.29-.54L12 4l-2.74.96a6.78 6.78 0 0 0-1.29.54L6.22 4.6l-1.7 1.7.88 1.74c-.22.42-.4.86-.54 1.3L3 12l.96 2.74c.14.44.32.88.54 1.29l-.88 1.75 1.7 1.7 1.75-.88c.41.22.85.4 1.29.54L12 20l2.74-.96c.44-.14.88-.32 1.29-.54l1.75.88 1.7-1.7-.88-1.75c.22-.41.4-.85.54-1.29L20 12z",
@@ -639,7 +640,7 @@
     `;
   }
 
-  function SettingsEditor({ meta, draft, setDraft }) {
+  function SettingsEditor({ meta, draft, setDraft, onTestProvider, testingProviderIndex }) {
     function updateRoot(key, value) {
       setDraft((current) => ({ ...current, [key]: value }));
     }
@@ -760,7 +761,18 @@
                 <div key=${index} className="config-card">
                   <div className="config-card-head">
                     <div className="config-card-title">${provider.provider_name || `Provider ${index + 1}`}</div>
-                    <button className="subtle-button danger-button" onClick=${() => removeProvider(index)}>移除</button>
+                    <div className="config-card-actions">
+                      <button
+                        className="subtle-icon-button"
+                        onClick=${() => onTestProvider(index)}
+                        disabled=${testingProviderIndex === index}
+                        aria-label="Test provider"
+                        title="测试接口"
+                      >
+                        <${Icon} name=${testingProviderIndex === index ? "reset" : "pulse"} size=${16} className=${testingProviderIndex === index ? "spin-icon" : ""} />
+                      </button>
+                      <button className="subtle-button danger-button" onClick=${() => removeProvider(index)}>移除</button>
+                    </div>
                   </div>
                   <div className="form-grid wide">
                     <label className="field">
@@ -857,6 +869,8 @@
     onSaveSettings,
     onSwitchSection,
     isSaving,
+    onTestProvider,
+    testingProviderIndex,
   }) {
     const sectionMeta = SETTINGS_SECTION_COPY[section];
 
@@ -897,7 +911,13 @@
 
           ${section === "系统设置" &&
           html`
-            <${SettingsEditor} meta=${meta} draft=${settingsDraft} setDraft=${setSettingsDraft} />
+            <${SettingsEditor}
+              meta=${meta}
+              draft=${settingsDraft}
+              setDraft=${setSettingsDraft}
+              onTestProvider=${onTestProvider}
+              testingProviderIndex=${testingProviderIndex}
+            />
             <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
               <button className="primary-button" onClick=${onSaveSettings} disabled=${isSaving}>保存设置</button>
             </div>
@@ -926,6 +946,7 @@
     const [composer, setComposer] = useState(makeDefaultComposer());
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [testingProviderIndex, setTestingProviderIndex] = useState(null);
     const [notices, setNotices] = useState([]);
 
     function pushNotice(message, kind = "success") {
@@ -1075,6 +1096,26 @@
       }
     }
 
+    async function testProvider(index) {
+      const provider = settingsDraft?.api_providers?.[index];
+      if (!provider) {
+        pushNotice("未找到要测试的接口。", "error");
+        return;
+      }
+      setTestingProviderIndex(index);
+      try {
+        const data = await fetchJson("/api/providers/test", {
+          method: "POST",
+          body: JSON.stringify({ provider }),
+        });
+        pushNotice(data.message || `${provider.provider_name} 接口可用。`);
+      } catch (error) {
+        pushNotice(error.message, "error");
+      } finally {
+        setTestingProviderIndex(null);
+      }
+    }
+
     const currentTitle = useMemo(() => currentSession?.title || "会诊工作区", [currentSession]);
 
     const currentCopy = useMemo(
@@ -1148,6 +1189,8 @@
                     onSaveSettings=${saveSettingsDraft}
                     onSwitchSection=${setSettingsSection}
                     isSaving=${isSaving}
+                    onTestProvider=${testProvider}
+                    testingProviderIndex=${testingProviderIndex}
                   />
                 `
               : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}

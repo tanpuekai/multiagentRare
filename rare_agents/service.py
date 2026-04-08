@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from uuid import uuid4
 
 from rare_agents.engine import run_multiagent_case
@@ -290,6 +294,17 @@ def settings_from_payload(payload: dict[str, Any]) -> SystemSettings:
     )
 
 
+def provider_from_payload(payload: dict[str, Any]) -> APIProviderConfig:
+    return APIProviderConfig(
+        provider_name=str(payload.get("provider_name", "OpenAI Compatible")).strip() or "OpenAI Compatible",
+        model_name=str(payload.get("model_name", "")).strip(),
+        endpoint=str(payload.get("endpoint", "")).strip(),
+        api_key=str(payload.get("api_key", "")).strip(),
+        agents_for_api=max(int(payload.get("agents_for_api", 1)), 1),
+        enabled=bool(payload.get("enabled", True)),
+    )
+
+
 def _select_value(payload: dict[str, Any], key: str, fallback: str) -> str:
     value = payload.get(key)
     if value is None:
@@ -297,6 +312,109 @@ def _select_value(payload: dict[str, Any], key: str, fallback: str) -> str:
     if isinstance(value, str):
         return value.strip() or fallback
     return str(value)
+
+
+def _trim_message(value: str, limit: int = 180) -> str:
+    clean = " ".join(value.split())
+    if len(clean) <= limit:
+        return clean
+    return f"{clean[: limit - 1].rstrip()}..."
+
+
+def _normalize_provider_endpoint(endpoint: str) -> str:
+    raw = endpoint.strip()
+    if not raw:
+        return ""
+    parsed = urllib_parse.urlsplit(raw if "://" in raw else f"https://{raw}")
+    path = parsed.path.rstrip("/")
+    for suffix in ("/chat/completions", "/responses", "/completions", "/models"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+    return urllib_parse.urlunsplit((parsed.scheme or "https", parsed.netloc, path, "", ""))
+
+
+def _build_probe_targets(provider: APIProviderConfig) -> list[tuple[str, str, bytes | None]]:
+    base = _normalize_provider_endpoint(provider.endpoint).rstrip("/")
+    targets: list[tuple[str, str, bytes | None]] = [("GET", f"{base}/models", None)]
+    if provider.model_name:
+        body = json.dumps(
+            {
+                "model": provider.model_name,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 1,
+                "temperature": 0,
+            }
+        ).encode("utf-8")
+        targets.append(("POST", f"{base}/chat/completions", body))
+    return targets
+
+
+def _request_provider_probe(url: str, method: str, api_key: str, body: bytes | None) -> tuple[int, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": "RareMDT/2.0",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib_request.Request(url, data=body, headers=headers, method=method)
+    with urllib_request.urlopen(request, timeout=8) as response:
+        payload = response.read().decode("utf-8", errors="replace")
+        return int(getattr(response, "status", 200)), payload
+
+
+def _extract_error_message(raw: str, fallback: str) -> str:
+    if not raw:
+        return fallback
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _trim_message(raw)
+
+    if isinstance(parsed, dict):
+        detail = parsed.get("error") or parsed.get("detail") or parsed.get("message")
+        if isinstance(detail, dict):
+            return _trim_message(str(detail.get("message") or detail.get("code") or fallback))
+        if detail:
+            return _trim_message(str(detail))
+    return fallback
+
+
+def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    provider_payload = payload.get("provider") if isinstance(payload.get("provider"), dict) else payload
+    provider = provider_from_payload(provider_payload)
+    provider_name = provider.provider_name or "当前接口"
+
+    if not provider.endpoint:
+        raise ValueError("请先填写接口地址。")
+    if not provider.api_key:
+        raise ValueError("请先填写 API Key。")
+
+    last_message = "无法连接到接口。"
+    for method, url, body in _build_probe_targets(provider):
+        try:
+            _request_provider_probe(url, method, provider.api_key, body)
+            suffix = "接口可用。"
+            if method == "POST":
+                suffix = "接口可用，模型调用测试通过。"
+            return {"message": f"{provider_name} {suffix}", "provider_name": provider_name}
+        except urllib_error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            detail = _extract_error_message(raw, f"HTTP {exc.code}")
+            if exc.code in {404, 405} and method == "GET":
+                last_message = f"{provider_name} 未提供 models 探测接口，已尝试继续深度探测。"
+                continue
+            if exc.code in {401, 403}:
+                raise ValueError(f"{provider_name} 鉴权失败，请检查 API Key。") from exc
+            if exc.code == 429:
+                return {"message": f"{provider_name} 接口可达，但当前触发限流。", "provider_name": provider_name}
+            raise ValueError(f"{provider_name} 测试失败：{detail}") from exc
+        except urllib_error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            raise ValueError(f"{provider_name} 无法连接：{_trim_message(str(reason))}") from exc
+
+    raise ValueError(last_message)
 
 
 def submit_case(payload: dict[str, Any]) -> dict[str, Any]:

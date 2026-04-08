@@ -792,6 +792,12 @@ a {
   font-weight: 800;
 }
 
+.config-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .subtle-button,
 .primary-button,
 .secondary-button {
@@ -818,6 +824,25 @@ a {
   color: var(--text-main);
 }
 
+.subtle-icon-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255,255,255,0.92);
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    transform var(--transition),
+    background var(--transition),
+    border-color var(--transition),
+    box-shadow var(--transition),
+    opacity var(--transition),
+    color var(--transition);
+}
+
 .primary-button {
   background: linear-gradient(180deg, #111827, #0f172a);
   color: var(--text-inverse);
@@ -826,12 +851,31 @@ a {
 
 .primary-button:hover,
 .secondary-button:hover,
-.subtle-button:hover {
+.subtle-button:hover,
+.subtle-icon-button:hover {
   transform: translateY(-1px);
+}
+
+.subtle-icon-button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.subtle-icon-button:disabled,
+.secondary-button:disabled,
+.primary-button:disabled,
+.subtle-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
 }
 
 .danger-button {
   color: #b91c1c;
+}
+
+.spin-icon {
+  animation: spin 0.9s linear infinite;
 }
 
 .composer-shell {
@@ -1065,6 +1109,15 @@ a {
   }
   to {
     transform: translateX(100%);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

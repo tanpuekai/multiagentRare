@@ -19,6 +19,7 @@ from rare_agents.service import (
     serialize_session,
     settings_from_payload,
     submit_case,
+    test_provider_connection,
 )
 
 
@@ -74,6 +75,15 @@ async def update_settings(request: Request) -> dict:
     settings = settings_from_payload(payload)
     save_settings(settings)
     return {"settings": settings.__dict__}
+
+
+@app.post("/api/providers/test")
+async def test_provider(request: Request) -> dict:
+    payload = await request.json()
+    try:
+        return test_provider_connection(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/diagnose")
