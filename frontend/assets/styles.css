@@ -814,11 +814,7 @@ a {
   flex-direction: column;
   gap: 20px;
   min-height: 100%;
-  padding-bottom: 28px;
-}
-
-.settings-panel {
-  padding: 24px;
+  padding: 24px 24px 28px;
 }
 
 .settings-header {

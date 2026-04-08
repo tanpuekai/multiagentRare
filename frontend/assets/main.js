@@ -975,68 +975,64 @@
 
     return html`
       <div className="settings-shell">
-        <div className="settings-panel">
-          <div className="settings-header">
-            <div>
-              <div className="settings-title">${sectionMeta.title}</div>
-              <div className="settings-copy">${sectionMeta.copy}</div>
-            </div>
-            <button className="secondary-button" onClick=${onClose}>
-              <${Icon} name="close" size=${16} />
-              关闭设置
-            </button>
+        <div className="settings-header">
+          <div>
+            <div className="settings-title">${sectionMeta.title}</div>
+            <div className="settings-copy">${sectionMeta.copy}</div>
           </div>
-
-          <div className="settings-nav">
-            ${meta.settings_menu.map(
-              (item) => html`
-                <button key=${item.section} className=${cx("chip", section === item.section && "is-active")} onClick=${() => onSwitchSection(item.section)}>
-                  <${Icon} name=${item.icon} size=${16} />
-                  ${item.label}
-                </button>
-              `
-            )}
-          </div>
+          <button className="secondary-button" onClick=${onClose}>
+            <${Icon} name="close" size=${16} />
+            关闭设置
+          </button>
         </div>
 
-        <div className="settings-panel">
-          ${section === "医生档案" &&
-          html`
-            <${ProfileSettings} meta=${meta} draft=${profileDraft} setDraft=${setProfileDraft} />
-            <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
-              <button className="primary-button" onClick=${onSaveProfile} disabled=${isSaving}>保存账户</button>
-            </div>
-          `}
-
-          ${section === "系统设置" &&
-          html`
-            <${SettingsEditor}
-              meta=${meta}
-              draft=${settingsDraft}
-              setDraft=${setSettingsDraft}
-              onTestProvider=${onTestProvider}
-              testingProviderIndex=${testingProviderIndex}
-            />
-            <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
-              <button className="primary-button" onClick=${onSaveSettings} disabled=${isSaving}>保存设置</button>
-            </div>
-          `}
-
-          ${section === "历史记录" &&
-          html`
-            <${HistoryPage}
-              meta=${meta}
-              sessions=${sessions}
-              onOpenSession=${onOpenSession}
-              onToggleSidebarSession=${onToggleSidebarSession}
-              onSetAllSidebarSessions=${onSetAllSidebarSessions}
-              visibilityBusyKey=${visibilityBusyKey}
-              selectedSession=${historyPreviewSession}
-              isLoadingDetail=${isHistoryPreviewLoading}
-              onBack=${onCloseHistoryPreview}
-            />
-          `}
+        <div className="settings-nav">
+          ${meta.settings_menu.map(
+            (item) => html`
+              <button key=${item.section} className=${cx("chip", section === item.section && "is-active")} onClick=${() => onSwitchSection(item.section)}>
+                <${Icon} name=${item.icon} size=${16} />
+                ${item.label}
+              </button>
+            `
+          )}
         </div>
+
+        ${section === "医生档案" &&
+        html`
+          <${ProfileSettings} meta=${meta} draft=${profileDraft} setDraft=${setProfileDraft} />
+          <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
+            <button className="primary-button" onClick=${onSaveProfile} disabled=${isSaving}>保存账户</button>
+          </div>
+        `}
+
+        ${section === "系统设置" &&
+        html`
+          <${SettingsEditor}
+            meta=${meta}
+            draft=${settingsDraft}
+            setDraft=${setSettingsDraft}
+            onTestProvider=${onTestProvider}
+            testingProviderIndex=${testingProviderIndex}
+          />
+          <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
+            <button className="primary-button" onClick=${onSaveSettings} disabled=${isSaving}>保存设置</button>
+          </div>
+        `}
+
+        ${section === "历史记录" &&
+        html`
+          <${HistoryPage}
+            meta=${meta}
+            sessions=${sessions}
+            onOpenSession=${onOpenSession}
+            onToggleSidebarSession=${onToggleSidebarSession}
+            onSetAllSidebarSessions=${onSetAllSidebarSessions}
+            visibilityBusyKey=${visibilityBusyKey}
+            selectedSession=${historyPreviewSession}
+            isLoadingDetail=${isHistoryPreviewLoading}
+            onBack=${onCloseHistoryPreview}
+          />
+        `}
       </div>
     `;
   }

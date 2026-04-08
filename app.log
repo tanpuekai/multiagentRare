@@ -12519,3 +12519,514 @@ INFO:     connection closed
 INFO:     127.0.0.1:57723 - "WebSocket /_stcore/stream" 403
 INFO:     connection failed (403 Forbidden)
 INFO:     connection closed
+INFO:     127.0.0.1:57767 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:57803 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:57827 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:57910 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:57985 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:57993 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58072 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58134 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58204 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58263 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58299 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58337 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58396 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58432 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58468 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58530 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58553 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58592 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58621 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58693 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58722 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58744 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58766 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58781 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58838 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58867 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58869 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58899 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58942 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:58964 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59007 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59044 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59073 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59090 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59157 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59179 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59217 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59239 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59268 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59290 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59330 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59361 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59394 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59409 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59473 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59503 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59535 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59586 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59615 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59642 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59673 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59705 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59749 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59804 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59854 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59915 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:59958 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60022 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60060 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60110 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60155 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60210 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60243 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60326 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60379 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60401 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60444 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60497 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60543 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60572 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60622 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60680 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60695 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60738 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60761 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60813 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60842 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60900 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60944 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:60987 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61067 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61119 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61185 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61243 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61280 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61346 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61422 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61483 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61535 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61565 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61636 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61660 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61697 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61776 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61819 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61876 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61898 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:61934 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62021 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62050 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62119 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62230 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62363 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62395 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62411 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62483 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62564 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62589 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62614 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62672 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62750 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62831 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62857 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62945 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:62971 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63035 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63076 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63111 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63162 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63187 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63260 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63270 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63335 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63400 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63483 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63508 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63573 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63615 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63648 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63699 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63748 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63798 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63831 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63889 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63954 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:63994 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64044 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64066 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64081 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64081 - "GET /vendor/purify.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64083 - "GET /assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64085 - "GET /vendor/react.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64086 - "GET /vendor/htm.umd.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64084 - "GET /vendor/react-dom.production.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64087 - "GET /vendor/marked.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64087 - "GET /assets/main.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64130 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64164 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64243 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64287 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64323 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64374 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64397 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64412 - "GET /api/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64412 - "GET /favicon.ico HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64463 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64527 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64543 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64600 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64643 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64715 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64765 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64801 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64811 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64875 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64925 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64961 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:64976 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65036 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65044 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65112 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65137 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65196 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65256 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65303 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65391 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
+INFO:     127.0.0.1:65401 - "WebSocket /_stcore/stream" 403
+INFO:     connection failed (403 Forbidden)
+INFO:     connection closed
