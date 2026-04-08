@@ -14760,3 +14760,18 @@ INFO:     127.0.0.1:63365 - "GET /api/sessions/0791d4a87b26 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:63365 - "GET /api/sessions/history-1 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:63365 - "GET /api/sessions/history-2 HTTP/1.1" 200 OK
 INFO:     127.0.0.1:63365 - "GET /api/sessions/history-3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53799 - "POST /api/providers/test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53799 - "POST /api/providers/test HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49187 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49187 - "GET /assets/styles.css HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49190 - "GET /vendor/react.production.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49189 - "GET /vendor/htm.umd.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49192 - "GET /vendor/purify.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49191 - "GET /vendor/react-dom.production.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49193 - "GET /vendor/marked.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49190 - "GET /assets/main.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:49193 - "GET /favicon.ico HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49190 - "GET /api/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50268 - "GET /api/sessions/history-3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50413 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50413 - "GET /api/bootstrap HTTP/1.1" 200 OK
