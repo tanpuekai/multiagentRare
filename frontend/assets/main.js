@@ -770,6 +770,11 @@
             ${isSubmitting ? "登录中..." : "登录"}
           </button>
         </div>
+
+        <div className="login-footer">
+          <div>© HKU-SZH 2026</div>
+          <div>Authors Peikai Chen and Marco Xu @AIBD Lab</div>
+        </div>
       </div>
     `;
   }
