@@ -1042,9 +1042,42 @@ a {
   white-space: pre-wrap;
 }
 
+.status-card {
+  align-self: flex-start;
+  max-width: 640px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: var(--text-main);
+  box-shadow: none;
+}
+
+.status-card.is-pending {
+  background: rgba(226, 232, 240, 0.78);
+}
+
+.status-card-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(51, 65, 85, 0.86);
+}
+
+.status-card-copy {
+  margin-top: 4px;
+  font-size: 0.92rem;
+  color: var(--text-subtle);
+}
+
 .result-card {
   max-width: 960px;
   padding: 24px;
+}
+
+.pending-result-card {
+  align-self: flex-start;
 }
 
 .result-head {

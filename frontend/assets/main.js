@@ -435,6 +435,32 @@
     return false;
   }
 
+  function resolveSingleModelProvider(settings) {
+    const firstRole = settings?.agent_roles?.[0] || null;
+    if (!firstRole) {
+      return { role: null, provider: null, providerIndex: -1 };
+    }
+    const providers = settings?.api_providers || [];
+    const providerIndex = providers.findIndex((item) => item.provider_name === firstRole.provider_name);
+    return {
+      role: firstRole,
+      provider: providerIndex >= 0 ? providers[providerIndex] : null,
+      providerIndex,
+    };
+  }
+
+  function resolveSingleModelExecution(settings) {
+    const { role: firstRole, provider } = resolveSingleModelProvider(settings);
+    if (!firstRole) {
+      return { roleName: "", providerName: "未配置", modelName: "未配置" };
+    }
+    return {
+      roleName: firstRole.role_name || "",
+      providerName: provider?.provider_name || firstRole.provider_name || "未配置",
+      modelName: provider?.model_name || "未配置模型",
+    };
+  }
+
   function readAuthToken() {
     try {
       return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
@@ -802,6 +828,54 @@
     `;
   }
 
+  function ExecutionStatusCard({ executionMode, providerName, modelName, isPending = false }) {
+    if (executionMode !== "single_model") {
+      return null;
+    }
+
+    return html`
+      <div className=${cx("status-card", isPending && "is-pending")}>
+        <div className="status-card-title">单模型测试已启用</div>
+        <div className="status-card-copy">${providerName} / ${modelName}</div>
+      </div>
+    `;
+  }
+
+  function PendingWorkspace({ submission, execution }) {
+    if (!submission) {
+      return null;
+    }
+
+    return html`
+      <div className="workspace-feed">
+        <div className="message-card message-user">
+          <div className="message-meta">
+            <span>病例输入</span>
+            <span>·</span>
+            <span>${formatTimestamp(submission.timestamp)}</span>
+          </div>
+          <div className="message-body">${submission.case_summary}</div>
+        </div>
+
+        <${ExecutionStatusCard}
+          executionMode=${execution?.mode}
+          providerName=${execution?.providerName || "未配置"}
+          modelName=${execution?.modelName || "未配置模型"}
+          isPending=${true}
+        />
+
+        <div className="result-card pending-result-card">
+          <div className="result-head">
+            <div>
+              <div className="result-title">正在生成结果</div>
+              <div className="result-summary">请求已提交，系统正在处理当前病例并准备回填临床结论。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function EmptyWorkspaceWordmark() {
     return html`
       <div className="empty-workspace-mark" aria-hidden="true">
@@ -857,6 +931,12 @@
           </div>
           <div className="message-body">${submission.case_summary}</div>
         </div>
+
+        <${ExecutionStatusCard}
+          executionMode=${result.execution_mode}
+          providerName=${result.serving_provider}
+          modelName=${result.serving_model}
+        />
 
         <div className="result-card">
           <div className="result-head">
@@ -1015,6 +1095,7 @@
     settings,
     composer,
     setComposer,
+    onToggleSingleModelTest,
     onSubmit,
     onReset,
     isSubmitting,
@@ -1553,7 +1634,10 @@
 
             <button
               className=${cx("icon-button", "tooltip-button", composer.single_model_test && "is-active")}
-              onClick=${() => updateField("single_model_test", !composer.single_model_test)}
+              onClick=${() =>
+                onToggleSingleModelTest
+                  ? onToggleSingleModelTest(!composer.single_model_test)
+                  : updateField("single_model_test", !composer.single_model_test)}
               aria-label="Single model test"
               data-tooltip="单模型测试"
             >
@@ -2260,6 +2344,7 @@
     const [profileDraft, setProfileDraft] = useState(null);
     const [settingsDraft, setSettingsDraft] = useState(null);
     const [composer, setComposer] = useState(makeDefaultComposer());
+    const [pendingSubmission, setPendingSubmission] = useState(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -2288,6 +2373,7 @@
       setMeta(null);
       setSessions([]);
       setCurrentSession(null);
+      setPendingSubmission(null);
       setProfileDraft(null);
       setSettingsDraft(null);
       setAdminAccounts([]);
@@ -2406,6 +2492,7 @@
       try {
         const data = await fetchJson(`/api/sessions/${sessionId}`);
         setCurrentSession(data.session);
+        setPendingSubmission(null);
         setActiveView("workspace");
         setDiagnosticsOpen(false);
         setSettingsMenuOpen(false);
@@ -2459,6 +2546,7 @@
         input_expanded: current.input_expanded,
         single_model_test: current.single_model_test,
       }));
+      setPendingSubmission(null);
     }
 
     async function submitCase() {
@@ -2468,6 +2556,9 @@
       }
       setIsSubmitting(true);
       try {
+        const execution = composer.single_model_test
+          ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
+          : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
         const payload = {
           case_summary: composer.case_summary,
           chief_complaint: composer.chief_complaint,
@@ -2482,11 +2573,19 @@
           uploaded_images: composer.image_files.map((file) => file.name),
           uploaded_docs: composer.doc_files.map((file) => file.name),
         };
+        setCurrentSession(null);
+        setPendingSubmission({
+          timestamp: new Date().toLocaleString("zh-CN", { hour12: false }),
+          case_summary: composer.case_summary,
+          execution,
+        });
+        setActiveView("workspace");
         const data = await fetchJson("/api/diagnose", {
           method: "POST",
           body: JSON.stringify(payload),
         });
         setCurrentSession(data.session);
+        setPendingSubmission(null);
         applySessionList(data.sessions || []);
         setComposer((current) => ({
           ...makeDefaultComposer(meta, settings),
@@ -2496,6 +2595,7 @@
         setActiveView("workspace");
         pushNotice("会诊已生成。");
       } catch (error) {
+        setPendingSubmission(null);
         if (!handleAuthError(error)) {
           pushNotice(error.message, "error");
         }
@@ -2545,6 +2645,35 @@
         }
       } finally {
         setIsSaving(false);
+      }
+    }
+
+    async function toggleSingleModelTest(nextValue) {
+      setComposer((current) => ({ ...current, single_model_test: nextValue }));
+      if (!nextValue) {
+        return;
+      }
+
+      const { role, provider } = resolveSingleModelProvider(settings);
+      if (!role) {
+        pushNotice("单模型测试已开启，但尚未配置 Agent Role。", "error");
+        return;
+      }
+      if (!provider) {
+        pushNotice(`单模型测试已开启，但未找到“${role.provider_name || role.role_name || "默认"}”接口配置。`, "error");
+        return;
+      }
+
+      try {
+        const data = await fetchJson("/api/providers/test", {
+          method: "POST",
+          body: JSON.stringify({ provider }),
+        });
+        pushNotice(data.message || `单模型默认接口 ${provider.provider_name || "未命名接口"} 测试通过。`);
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(`单模型默认接口 ${provider.provider_name || "未命名接口"} 测试失败：${error.message}`, "error");
+        }
       }
     }
 
@@ -2734,7 +2863,7 @@
         <div className=${cx("workspace-region", activeView === "workspace" && diagnosticsOpen && "diagnostics-open")}>
           <div className="main-stage">
             <main className="shell-main">
-              ${activeView === "workspace" && !currentSession && html`<${EmptyWorkspaceWordmark} />`}
+              ${activeView === "workspace" && !currentSession && !pendingSubmission && html`<${EmptyWorkspaceWordmark} />`}
               <div className="main-scroll">
                 ${activeView === "settings"
                   ? html`
@@ -2770,7 +2899,9 @@
                         isAccountMutating=${isAccountMutating}
                       />
                     `
-                  : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
+                  : pendingSubmission
+                    ? html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />`
+                    : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
               </div>
 
               ${activeView === "workspace" &&
@@ -2780,6 +2911,7 @@
                   settings=${settings}
                   composer=${composer}
                   setComposer=${setComposer}
+                  onToggleSingleModelTest=${toggleSingleModelTest}
                   onSubmit=${submitCase}
                   onReset=${resetComposer}
                   isSubmitting=${isSubmitting}

@@ -116,6 +116,9 @@ class EngineResult:
     consensus_score: float
     topology_used: str
     show_process: bool
+    execution_mode: str = "multi_agent"
+    serving_provider: str = ""
+    serving_model: str = ""
 
 
 @dataclass

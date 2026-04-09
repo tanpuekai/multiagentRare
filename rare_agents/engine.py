@@ -230,6 +230,9 @@ def run_multiagent_case(submission: CaseSubmission, profile: AppProfile, setting
         consensus_score=consensus_score,
         topology_used=settings.orchestration_mode,
         show_process=submission.show_process,
+        execution_mode="multi_agent",
+        serving_provider="",
+        serving_model="",
     )
 
 
@@ -289,4 +292,7 @@ def run_single_model_case(
         consensus_score=1.0,
         topology_used="Single Model",
         show_process=submission.show_process,
+        execution_mode="single_model",
+        serving_provider=provider_name,
+        serving_model=model_name,
     )
