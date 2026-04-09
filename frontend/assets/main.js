@@ -4,7 +4,7 @@
 
   const ICON_PATHS = {
     plus: "M12 5v14M5 12h14",
-    paste: "M16 4h-2.2a2.8 2.8 0 0 0-5.6 0H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm-5-1a1.5 1.5 0 0 1 1.5 1.5h-3A1.5 1.5 0 0 1 11 3zm5 17H6V6h1.5v1.5h7V6H16v14z",
+    paste: "M8.5 3.5h6l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 7.5 19V5A1.5 1.5 0 0 1 9 3.5zM14.5 3.5V8H19M10 11.25h5.5M10 14.75h5.5M10 18.25h3.5",
     reset: "M3 12a9 9 0 1 0 3-6.708M3 4v5h5",
     pulse: "M3 12h4l2.4-4.5 4.2 9 2.3-4.5H21",
     arrowUp: "M12 19V5M6 11l6-6 6 6",
@@ -14,6 +14,7 @@
     account: "M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2-7 4.5V20h14v-1.5C19 16 16 14 12 14z",
     users: "M16 11a3 3 0 1 0-2.999-3A3 3 0 0 0 16 11zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.9 0-5 1.45-5 3.5V20h10v-2.5C13 15.45 10.9 14 8 14zm8 0c-.66 0-1.28.08-1.86.22 1.15.7 1.86 1.72 1.86 3.28V20h5v-2.1c0-2.15-2.07-3.9-5-3.9z",
     hub: "M12 3v4M5 8l3 2M19 8l-3 2M12 21v-4M5 16l3-2M19 16l-3-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+    diagnostics: "M3 12h4l2.1-3.6 3 8.4 3.2-9.8 2 5H21",
     spark: "M12 3l1.8 4.8L18 9.6l-4.2 1.2L12 15.6l-1.8-4.8L6 9.6l4.2-1.8z",
     chevronLeft: "M15 6 9 12l6 6",
     panelToggle: "M4.5 5.5h15v13h-15zM9 5.5v13M14.5 9.25 11.5 12l3 2.75",
@@ -182,8 +183,8 @@
       <aside className="shell-sidebar">
         <div className="sidebar-inner">
           <div className="sidebar-toolbar">
-            <button className="ghost-icon-button sidebar-toggle-button" onClick=${onToggleSidebar} aria-label=${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>
-              <${Icon} name="panelToggle" size=${18} className=${cx("sidebar-toggle-icon", sidebarCollapsed && "is-collapsed")} />
+            <button className="sidebar-toggle-button" onClick=${onToggleSidebar} aria-label=${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>
+              <${Icon} name="panelToggle" size=${27} className=${cx("sidebar-toggle-icon", sidebarCollapsed && "is-collapsed")} />
             </button>
           </div>
 
@@ -228,8 +229,8 @@
                   ${currentUser?.username || ""}${profile?.title ? ` · ${profile.title}` : ""}${profile?.department ? ` · ${label(meta, "department", profile.department)}` : ""}
                 </div>
               </div>
-              <button className=${cx("ghost-icon-button", settingsMenuOpen && "is-active")} onClick=${onToggleSettingsMenu} aria-label="Settings menu">
-                <${Icon} name="settings" size=${22} />
+              <button className=${cx("sidebar-settings-button", settingsMenuOpen && "is-active")} onClick=${onToggleSettingsMenu} aria-label="Settings menu">
+                <${Icon} name="settings" size=${26} />
               </button>
             </div>
             <div className="sidebar-footer-copy" style=${{ marginTop: "8px" }}>
@@ -599,7 +600,7 @@
 
           <div className="composer-controls">
             <button className="icon-button" onClick=${() => updateField("attachment_panel_open", !composer.attachment_panel_open)} aria-label="Toggle attachments">
-              <${Icon} name="plus" size=${18} />
+              <${Icon} name="plus" size=${24} />
             </button>
 
             <div className="composer-status">${composer.attachment_panel_open ? "附件面板已展开" : "Command + Enter 提交病例"}</div>
@@ -614,11 +615,11 @@
             </button>
 
             <button className="icon-button tooltip-button" onClick=${pasteFromClipboard} aria-label="Paste from clipboard" data-tooltip="从剪贴板粘贴">
-              <${Icon} name="paste" size=${18} />
+              <${Icon} name="paste" size=${24} />
             </button>
 
             <button className="icon-button tooltip-button" onClick=${onReset} aria-label="Reset composer" data-tooltip="清空重置">
-              <${Icon} name="reset" size=${18} />
+              <${Icon} name="reset" size=${22} />
             </button>
 
             <div className="tooltip-button" data-tooltip=${hasInput ? "提交" : "请填写病例内容"}>
@@ -628,7 +629,7 @@
                 onClick=${onSubmit}
                 aria-label="Submit case"
               >
-                <${Icon} name="arrowUp" size=${18} />
+                <${Icon} name="arrowUp" size=${24} />
               </button>
             </div>
           </div>
@@ -1794,7 +1795,7 @@
                 aria-label="诊断面板"
                 data-tooltip="诊断面板"
               >
-                <${Icon} name="hub" size=${18} />
+                <${Icon} name="diagnostics" size=${27} />
               </button>
             `}
           </div>
