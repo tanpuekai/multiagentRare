@@ -231,3 +231,62 @@ def run_multiagent_case(submission: CaseSubmission, profile: AppProfile, setting
         topology_used=settings.orchestration_mode,
         show_process=submission.show_process,
     )
+
+
+def run_single_model_case(
+    submission: CaseSubmission,
+    profile: AppProfile,
+    settings: SystemSettings,
+    *,
+    provider_name: str,
+    model_name: str,
+    role_name: str,
+    role_spec: str,
+    generated_answer: str,
+) -> EngineResult:
+    references = normalize_refs(submission.department)
+    title = f"{build_title(submission)} · 单模型测试"
+    executive_summary = (
+        f"当前已切换为单模型测试模式，由 {provider_name} / {model_name} 基于首个 Agent Role"
+        f"（{role_name}）直接生成临床草案，未执行多智能体收敛流程。"
+    )
+    answer = generated_answer.strip() or build_professional_answer(submission, profile)
+    next_steps = [
+        "当前结果来自单模型直出，建议仅用于接口连通性与草案风格测试。",
+        "如需正式会诊结论，请关闭单模型测试并重新运行多智能体路径。",
+        "提交临床前，仍需由医生复核事实、适应证、编码与费用说明。",
+        "如涉及高风险治疗或手术，请升级至 MDT 讨论与院内流程复核。",
+    ]
+    safety_note = (
+        "当前为单模型测试输出，未经过多智能体交叉核查与收敛，"
+        "不可作为诊断、手术或处方的唯一依据。"
+    )
+    return EngineResult(
+        title=title,
+        executive_summary=executive_summary,
+        department=submission.department,
+        output_style=submission.output_style,
+        professional_answer=answer,
+        coding_table=build_coding_table(submission),
+        cost_table=build_cost_table(submission),
+        references=references,
+        next_steps=next_steps,
+        safety_note=safety_note,
+        rounds=[
+            {
+                "round": 1,
+                "alignment": 1.0,
+                "summary": f"单模型测试模式下，由 {provider_name} / {model_name} 直接完成首轮输出，未进入多模型协同。",
+            }
+        ],
+        agent_trace=[
+            {
+                "role": role_name,
+                "provider": provider_name,
+                "note": f"单模型测试入口角色；角色说明：{role_spec}",
+            }
+        ],
+        consensus_score=1.0,
+        topology_used="Single Model",
+        show_process=submission.show_process,
+    )

@@ -77,6 +77,7 @@ class CaseSubmission:
     uploaded_images: list[str]
     uploaded_docs: list[str]
     show_process: bool
+    single_model_test: bool = False
     is_ready: bool = True
 
     @classmethod
@@ -93,6 +94,7 @@ class CaseSubmission:
             uploaded_images=[],
             uploaded_docs=[],
             show_process=False,
+            single_model_test=False,
             is_ready=False,
         )
 

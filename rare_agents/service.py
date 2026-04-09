@@ -18,7 +18,7 @@ from rare_agents.auth import (
     set_account_disabled as set_auth_account_disabled,
     user_data_dir,
 )
-from rare_agents.engine import run_multiagent_case
+from rare_agents.engine import run_multiagent_case, run_single_model_case
 from rare_agents.intake_parser import parse_ehr_intake
 from rare_agents.models import (
     APIProviderConfig,
@@ -403,6 +403,26 @@ def _request_provider_probe(url: str, method: str, api_key: str, body: bytes | N
         return int(getattr(response, "status", 200)), payload
 
 
+def _request_provider_json(url: str, api_key: str, body: dict[str, Any], *, timeout: int = 45) -> dict[str, Any]:
+    payload = json.dumps(body).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "RareMDT/2.0",
+    }
+    request = urllib_request.Request(url, data=payload, headers=headers, method="POST")
+    with urllib_request.urlopen(request, timeout=timeout) as response:
+        raw = response.read().decode("utf-8", errors="replace")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("接口返回了无法解析的响应。") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("接口返回格式不符合预期。")
+    return parsed
+
+
 def _extract_error_message(raw: str, fallback: str) -> str:
     if not raw:
         return fallback
@@ -418,6 +438,121 @@ def _extract_error_message(raw: str, fallback: str) -> str:
         if detail:
             return _trim_message(str(detail))
     return fallback
+
+
+def _extract_chat_content(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+            if parts:
+                return "\n".join(parts).strip()
+
+    output = payload.get("output")
+    if isinstance(output, list):
+        texts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "output_text" and isinstance(content.get("text"), str):
+                    texts.append(content["text"])
+        if texts:
+            return "\n".join(texts).strip()
+
+    raise ValueError("接口返回中未找到可用文本内容。")
+
+
+def _resolve_single_model_provider(settings: SystemSettings) -> tuple[AgentRoleConfig, APIProviderConfig]:
+    if not settings.agent_roles:
+        raise ValueError("未配置 Agent Roles，无法进行单模型测试。")
+    first_role = settings.agent_roles[0]
+    for provider in settings.api_providers:
+        if provider.provider_name == first_role.provider_name:
+            return first_role, provider
+    raise ValueError("首个 Agent Role 绑定的接口不存在，请先检查设置。")
+
+
+def _build_single_model_messages(submission: CaseSubmission, profile: AppProfile, role: AgentRoleConfig) -> list[dict[str, str]]:
+    system_prompt = (
+        "你是一名罕见病临床辅助模型，正在为真实医生生成会诊草案。"
+        "输出必须专业、谨慎、结构清晰，使用简体中文。"
+        "不得假装已确认最终诊断；不确定时应给出鉴别方向、下一步检查与安全提醒。"
+        f" 当前角色：{role.role_name}。角色说明：{role.role_spec}"
+    )
+    user_prompt = (
+        f"医院：{profile.hospital_name}\n"
+        f"医生：{profile.user_name} {profile.title}\n"
+        f"默认专科方向：{profile.specialty_focus}\n\n"
+        f"病例摘要：\n{submission.case_summary}\n\n"
+        f"主诉：{submission.chief_complaint or '未提供'}\n"
+        f"年龄：{submission.patient_age or '未提供'}\n"
+        f"性别：{submission.patient_sex or '未提供'}\n"
+        f"科室：{submission.department}\n"
+        f"输出类型：{submission.output_style}\n"
+        f"紧急程度：{submission.urgency}\n"
+        f"医保类型：{submission.insurance_type}\n"
+        f"影像附件：{', '.join(submission.uploaded_images) if submission.uploaded_images else '无'}\n"
+        f"文档附件：{', '.join(submission.uploaded_docs) if submission.uploaded_docs else '无'}\n\n"
+        "请直接生成一份适合临床医生阅读的结构化会诊草案，建议包含："
+        "诊断判断、主要依据、鉴别诊断、下一步检查/处理建议、安全提醒。"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _run_single_model_provider_case(
+    submission: CaseSubmission,
+    profile: AppProfile,
+    settings: SystemSettings,
+) -> EngineResult:
+    role, provider = _resolve_single_model_provider(settings)
+    if not provider.endpoint:
+        raise ValueError("单模型测试失败：首个 Agent Role 绑定的接口未填写地址。")
+    if not provider.api_key:
+        raise ValueError("单模型测试失败：首个 Agent Role 绑定的接口未填写 API Key。")
+    if not provider.model_name:
+        raise ValueError("单模型测试失败：首个 Agent Role 绑定的接口未填写模型名。")
+
+    base = _normalize_provider_endpoint(provider.endpoint).rstrip("/")
+    url = f"{base}/chat/completions"
+    body = {
+        "model": provider.model_name,
+        "messages": _build_single_model_messages(submission, profile, role),
+        "temperature": 0.2,
+    }
+    try:
+        payload = _request_provider_json(url, provider.api_key, body)
+    except urllib_error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        detail = _extract_error_message(raw, f"HTTP {exc.code}")
+        if exc.code in {401, 403}:
+            raise ValueError("单模型测试失败：鉴权失败，请检查首个 Agent Role 对应接口的 API Key。") from exc
+        raise ValueError(f"单模型测试失败：{detail}") from exc
+    except urllib_error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise ValueError(f"单模型测试失败：无法连接接口，{_trim_message(str(reason))}") from exc
+
+    generated_answer = _extract_chat_content(payload)
+    return run_single_model_case(
+        submission=submission,
+        profile=profile,
+        settings=settings,
+        provider_name=provider.provider_name,
+        model_name=provider.model_name,
+        role_name=role.role_name,
+        role_spec=role.role_spec,
+        generated_answer=generated_answer,
+    )
 
 
 def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
@@ -477,9 +612,14 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
         uploaded_images=[str(item) for item in payload.get("uploaded_images", [])],
         uploaded_docs=[str(item) for item in payload.get("uploaded_docs", [])],
         show_process=bool(payload.get("show_process", settings.show_diagnostics)),
+        single_model_test=bool(payload.get("single_model_test", False)),
     )
 
-    result = run_multiagent_case(submission=submission, profile=profile, settings=settings)
+    result = (
+        _run_single_model_provider_case(submission=submission, profile=profile, settings=settings)
+        if submission.single_model_test
+        else run_multiagent_case(submission=submission, profile=profile, settings=settings)
+    )
     session = CaseSessionRecord.from_result(uuid4().hex[:12], submission, result)
     history_item = QueryHistoryItem(
         timestamp=session.timestamp,

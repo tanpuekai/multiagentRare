@@ -8,6 +8,7 @@
     reset: "M3 12a9 9 0 1 0 3-6.708M3 4v5h5",
     pulse: "M3 12h4l2.4-4.5 4.2 9 2.3-4.5H21",
     arrowUp: "M12 19V5M6 11l6-6 6 6",
+    singleModel: "M12 4a8 8 0 1 0 0 16 8 8 0 1 0 0-16M10.6 9.4 12 8.2v7.6",
     close: "M6 6l12 12M18 6 6 18",
     settings: "M12 3.25h.32a1.6 1.6 0 0 1 1.58 1.37l.22 1.51c.46.14.9.33 1.31.54l1.24-.83a1.6 1.6 0 0 1 2.08.18l.23.23a1.6 1.6 0 0 1 .18 2.08l-.83 1.24c.21.41.4.85.54 1.31l1.51.22A1.6 1.6 0 0 1 20.75 12v.32a1.6 1.6 0 0 1-1.37 1.58l-1.51.22c-.14.46-.33.9-.54 1.31l.83 1.24a1.6 1.6 0 0 1-.18 2.08l-.23.23a1.6 1.6 0 0 1-2.08.18l-1.24-.83c-.41.21-.85.4-1.31.54l-.22 1.51a1.6 1.6 0 0 1-1.58 1.37H12a1.6 1.6 0 0 1-1.58-1.37l-.22-1.51a6.7 6.7 0 0 1-1.31-.54l-1.24.83a1.6 1.6 0 0 1-2.08-.18l-.23-.23a1.6 1.6 0 0 1-.18-2.08l.83-1.24a6.7 6.7 0 0 1-.54-1.31l-1.51-.22A1.6 1.6 0 0 1 3.25 12.32V12a1.6 1.6 0 0 1 1.37-1.58l1.51-.22c.14-.46.33-.9.54-1.31l-.83-1.24a1.6 1.6 0 0 1 .18-2.08l.23-.23a1.6 1.6 0 0 1 2.08-.18l1.24.83c.41-.21.85-.4 1.31-.54l.22-1.51A1.6 1.6 0 0 1 12 3.25zm0 5.15a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2z",
     history: "M12 8v5l3 2M12 3a9 9 0 1 0 9 9",
@@ -131,6 +132,17 @@
         { id: "routine", label: "常规", tokenLabel: "紧急程度·常规" },
         { id: "priority", label: "加急", tokenLabel: "紧急程度·加急" },
         { id: "critical", label: "危重", tokenLabel: "紧急程度·危重" },
+      ],
+    },
+    {
+      id: "taskType",
+      label: "任务类型",
+      hint: "快速指定输出目标",
+      searchText: "诊断意见 治疗规划 康复计划 任务类型",
+      children: [
+        { id: "diagnosticOpinion", label: "请做出诊断意见", tokenLabel: "任务类型·请做出诊断意见" },
+        { id: "treatmentPlan", label: "请做出治疗规划", tokenLabel: "任务类型·请做出治疗规划" },
+        { id: "rehabPlan", label: "请做出康复计划", tokenLabel: "任务类型·请做出康复计划" },
       ],
     },
   ];
@@ -362,7 +374,7 @@
 
     const query = textBefore.slice(slashIndex + 1);
     const previousChar = slashIndex > 0 ? textBefore[slashIndex - 1] : "";
-    if (((previousChar && !/[\s\n([{（【，。,、；;:：-]/.test(previousChar)) || /\s/.test(query))) {
+    if ((previousChar && !/[\s\n([{（【，。,、；;:：-]/.test(previousChar)) || /\s/.test(query)) {
       return null;
     }
 
@@ -381,7 +393,7 @@
       query,
       position: {
         left: Math.max(14, rect.left - wrapRect.left),
-        top: Math.max(18, rect.bottom - wrapRect.top + 12),
+        bottom: Math.max(24, wrapRect.bottom - rect.top + 8),
       },
     };
   }
@@ -493,6 +505,7 @@
       urgency: meta?.urgency_options?.[0] || "Routine",
       show_process: settings?.show_diagnostics ?? true,
       input_expanded: false,
+      single_model_test: false,
       attachment_panel_open: false,
       image_files: [],
       doc_files: [],
@@ -513,6 +526,34 @@
   }
 
   function Icon({ name, size = 18, className = "" }) {
+    if (name === "singleModel") {
+      return html`
+        <svg
+          className=${className}
+          width=${size}
+          height=${size}
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="9.2" stroke="currentColor" strokeWidth="1.9"></circle>
+          <text
+            x="12"
+            y="13.35"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize="13.9"
+            fontWeight="700"
+            fill="currentColor"
+            stroke="none"
+            style=${{ fontFamily: '"Noto Serif SC", "Songti SC", "STSong", serif' }}
+          >
+            单
+          </text>
+        </svg>
+      `;
+    }
+
     return html`
       <svg
         className=${className}
@@ -984,22 +1025,22 @@
     const editorWrapRef = useRef(null);
     const editorRef = useRef(null);
     const slashContextRef = useRef(null);
+    const slashRootItemRefs = useRef([]);
+    const slashChildItemRefs = useRef([]);
     const [slashMenu, setSlashMenu] = useState({
       open: false,
       path: [],
       activeIndex: 0,
       query: "",
-      position: { left: 20, top: 28 },
+      position: { left: 20, bottom: 156 },
     });
-    const slashItems = useMemo(() => {
-      const baseItems = getSlashItems(slashMenu.path);
-      const filtered = filterSlashItems(baseItems, slashMenu.query);
-      return filtered.length || !slashMenu.path.length ? filtered : baseItems;
-    }, [slashMenu.path, slashMenu.query]);
-    const slashPathItems = useMemo(
-      () => slashMenu.path.map((step) => SLASH_MENU_TREE.find((item) => item.id === step)).filter(Boolean),
-      [slashMenu.path]
-    );
+    const slashRootItems = useMemo(() => {
+      const filtered = filterSlashItems(SLASH_MENU_TREE, slashMenu.path.length ? "" : slashMenu.query);
+      return filtered.length || slashMenu.path.length ? filtered : SLASH_MENU_TREE;
+    }, [slashMenu.path.length, slashMenu.query]);
+    const activeRootId = slashMenu.path[0] || null;
+    const activeRootItem = useMemo(() => SLASH_MENU_TREE.find((item) => item.id === activeRootId) || null, [activeRootId]);
+    const slashChildItems = useMemo(() => activeRootItem?.children || [], [activeRootItem]);
 
     useEffect(() => {
       if (!composer.attachment_panel_open) {
@@ -1048,15 +1089,32 @@
       if (!slashMenu.open) {
         return;
       }
-      if (!slashItems.length) {
+      if (!slashRootItems.length) {
         slashContextRef.current = null;
         setSlashMenu((current) => ({ ...current, open: false, path: [], activeIndex: 0, query: "" }));
         return;
       }
-      if (slashMenu.activeIndex >= slashItems.length) {
+      if (!slashMenu.path.length && slashMenu.activeIndex >= slashRootItems.length) {
         setSlashMenu((current) => ({ ...current, activeIndex: 0 }));
       }
-    }, [slashItems.length, slashMenu.activeIndex, slashMenu.open]);
+      if (slashMenu.path.length && slashMenu.activeIndex >= slashChildItems.length) {
+        setSlashMenu((current) => ({ ...current, activeIndex: 0 }));
+      }
+    }, [slashRootItems.length, slashChildItems.length, slashMenu.activeIndex, slashMenu.open, slashMenu.path.length]);
+
+    useEffect(() => {
+      if (!slashMenu.open) {
+        return;
+      }
+      const activeNode = slashMenu.path.length ? slashChildItemRefs.current[slashMenu.activeIndex] : slashRootItemRefs.current[slashMenu.activeIndex];
+      if (!activeNode) {
+        return;
+      }
+      activeNode.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+    }, [slashMenu.open, slashMenu.activeIndex, slashMenu.path.length, slashRootItems.length, slashChildItems.length, slashMenu.query]);
 
     function syncComposerFromEditor() {
       const editor = editorRef.current;
@@ -1097,9 +1155,7 @@
       }
 
       const nextPath = pathOverride || slashMenu.path;
-      const baseItems = getSlashItems(nextPath);
-      const filteredItems = filterSlashItems(baseItems, context.query);
-      const visibleItems = filteredItems.length || !nextPath.length ? filteredItems : baseItems;
+      const visibleItems = nextPath.length ? getSlashItems(nextPath) : filterSlashItems(SLASH_MENU_TREE, context.query);
       if (!visibleItems.length) {
         closeSlashMenu();
         return;
@@ -1221,7 +1277,13 @@
           event.preventDefault();
           setSlashMenu((current) => ({
             ...current,
-            activeIndex: slashItems.length ? (current.activeIndex + 1) % slashItems.length : 0,
+            activeIndex: current.path.length
+              ? slashChildItems.length
+                ? (current.activeIndex + 1) % slashChildItems.length
+                : 0
+              : slashRootItems.length
+                ? (current.activeIndex + 1) % slashRootItems.length
+                : 0,
           }));
           return;
         }
@@ -1229,12 +1291,18 @@
           event.preventDefault();
           setSlashMenu((current) => ({
             ...current,
-            activeIndex: slashItems.length ? (current.activeIndex - 1 + slashItems.length) % slashItems.length : 0,
+            activeIndex: current.path.length
+              ? slashChildItems.length
+                ? (current.activeIndex - 1 + slashChildItems.length) % slashChildItems.length
+                : 0
+              : slashRootItems.length
+                ? (current.activeIndex - 1 + slashRootItems.length) % slashRootItems.length
+                : 0,
           }));
           return;
         }
         if (event.key === "ArrowRight" || event.key === "Enter") {
-          const activeItem = slashItems[slashMenu.activeIndex];
+          const activeItem = slashMenu.path.length ? slashChildItems[slashMenu.activeIndex] : slashRootItems[slashMenu.activeIndex];
           if (activeItem) {
             event.preventDefault();
             if (activeItem.children) {
@@ -1314,53 +1382,74 @@
             ></div>
 
             ${slashMenu.open &&
-            slashItems.length > 0 &&
+            slashRootItems.length > 0 &&
             html`
-              <div className="slash-menu-popup" style=${{ left: `${slashMenu.position.left}px`, top: `${slashMenu.position.top}px` }}>
-                <div className="slash-menu-header">
-                  ${slashMenu.path.length
-                    ? html`
+              <div className="slash-menu-stack" style=${{ left: `${slashMenu.position.left}px`, bottom: `${slashMenu.position.bottom}px` }}>
+                <div className="slash-menu-popup">
+                  <div className="slash-menu-list">
+                    ${slashRootItems.map(
+                      (item, index) => html`
                         <button
-                          className="slash-menu-back"
+                          key=${item.id}
+                          ref=${(node) => {
+                            slashRootItemRefs.current[index] = node;
+                          }}
                           type="button"
+                          className=${cx(
+                            "slash-menu-item",
+                            item.id === "taskType" && "has-divider",
+                            !slashMenu.path.length && index === slashMenu.activeIndex && "is-active",
+                            slashMenu.path[0] === item.id && "is-selected"
+                          )}
+                          title=${item.hint || ""}
                           onMouseDown=${(event) => event.preventDefault()}
-                          onClick=${() => setSlashMenu((current) => ({ ...current, path: current.path.slice(0, -1), activeIndex: 0, query: "" }))}
+                          onMouseEnter=${() => {
+                            if (slashMenu.path.length) {
+                              setSlashMenu((current) => ({ ...current, path: [item.id], activeIndex: 0, query: "" }));
+                            } else {
+                              setSlashMenu((current) => ({ ...current, activeIndex: index }));
+                            }
+                          }}
+                          onClick=${() => setSlashMenu((current) => ({ ...current, path: [item.id], activeIndex: 0, query: "" }))}
                         >
-                          <${Icon} name="chevronLeft" size=${14} />
+                          <div className="slash-menu-copy">
+                            <span className="slash-menu-label">${item.label}</span>
+                          </div>
+                          ${item.children && html`<span className="slash-menu-arrow">›</span>`}
                         </button>
-                        <div className="slash-menu-breadcrumb">
-                          ${slashPathItems.map((item) => html`<span key=${item.id}>${item.label}</span>`)}
-                        </div>
                       `
-                    : html`<div className="slash-menu-title">快捷插入</div>`}
+                    )}
+                  </div>
                 </div>
 
-                <div className="slash-menu-list">
-                  ${slashItems.map(
-                    (item, index) => html`
-                      <button
-                        key=${item.id}
-                        type="button"
-                        className=${cx("slash-menu-item", index === slashMenu.activeIndex && "is-active")}
-                        onMouseDown=${(event) => event.preventDefault()}
-                        onMouseEnter=${() => setSlashMenu((current) => ({ ...current, activeIndex: index }))}
-                        onClick=${() => {
-                          if (item.children) {
-                            setSlashMenu((current) => ({ ...current, path: [...current.path, item.id], activeIndex: 0, query: "" }));
-                          } else {
-                            insertSlashToken(item);
-                          }
-                        }}
-                      >
-                        <div className="slash-menu-copy">
-                          <span className="slash-menu-label">${item.label}</span>
-                          ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
-                        </div>
-                        ${item.children && html`<span className="slash-menu-arrow">›</span>`}
-                      </button>
-                    `
-                  )}
-                </div>
+                ${slashMenu.path.length &&
+                slashChildItems.length > 0 &&
+                html`
+                  <div className="slash-menu-popup slash-submenu-popup">
+                    <div className="slash-menu-list">
+                      ${slashChildItems.map(
+                        (item, index) => html`
+                          <button
+                            key=${item.id}
+                            ref=${(node) => {
+                              slashChildItemRefs.current[index] = node;
+                            }}
+                            type="button"
+                            className=${cx("slash-menu-item", index === slashMenu.activeIndex && "is-active")}
+                            title=${item.hint || ""}
+                            onMouseDown=${(event) => event.preventDefault()}
+                            onMouseEnter=${() => setSlashMenu((current) => ({ ...current, activeIndex: index }))}
+                            onClick=${() => insertSlashToken(item)}
+                          >
+                            <div className="slash-menu-copy">
+                              <span className="slash-menu-label">${item.label}</span>
+                            </div>
+                          </button>
+                        `
+                      )}
+                    </div>
+                  </div>
+                `}
               </div>
             `}
           </div>
@@ -1461,6 +1550,15 @@
             </div>
 
             <div className="composer-status">${composer.attachment_panel_open ? "附件菜单已展开" : "Command + Enter 提交病例"}</div>
+
+            <button
+              className=${cx("icon-button", "tooltip-button", composer.single_model_test && "is-active")}
+              onClick=${() => updateField("single_model_test", !composer.single_model_test)}
+              aria-label="Single model test"
+              data-tooltip="单模型测试"
+            >
+              <${Icon} name="singleModel" size=${26} />
+            </button>
 
             <button
               className=${cx("toggle-pill", "tooltip-button", composer.input_expanded && "is-on")}
@@ -2359,6 +2457,7 @@
       setComposer((current) => ({
         ...makeDefaultComposer(meta, settings),
         input_expanded: current.input_expanded,
+        single_model_test: current.single_model_test,
       }));
     }
 
@@ -2379,6 +2478,7 @@
           output_style: composer.output_style,
           urgency: composer.urgency,
           show_process: composer.show_process,
+          single_model_test: composer.single_model_test,
           uploaded_images: composer.image_files.map((file) => file.name),
           uploaded_docs: composer.doc_files.map((file) => file.name),
         };
@@ -2388,7 +2488,11 @@
         });
         setCurrentSession(data.session);
         applySessionList(data.sessions || []);
-        setComposer(makeDefaultComposer(meta, settings));
+        setComposer((current) => ({
+          ...makeDefaultComposer(meta, settings),
+          input_expanded: current.input_expanded,
+          single_model_test: current.single_model_test,
+        }));
         setActiveView("workspace");
         pushNotice("会诊已生成。");
       } catch (error) {
