@@ -42,6 +42,387 @@
     },
   };
 
+  const SLASH_MENU_TREE = [
+    {
+      id: "gender",
+      label: "性别",
+      hint: "患者性别",
+      searchText: "男 女 未知 性别",
+      children: [
+        { id: "male", label: "男", tokenLabel: "性别·男", value: "male" },
+        { id: "female", label: "女", tokenLabel: "性别·女", value: "female" },
+        { id: "unknown", label: "未知", tokenLabel: "性别·未知", value: "unknown" },
+      ],
+    },
+    {
+      id: "internal",
+      label: "内科",
+      hint: "10 个内科专科",
+      searchText: "心内科 呼吸内科 消化内科 神经内科 肾内科 血液科 内分泌科 风湿免疫科 感染科 老年医学科",
+      children: [
+        { id: "cardiology", label: "心内科", tokenLabel: "内科·心内科" },
+        { id: "respiratory", label: "呼吸内科", tokenLabel: "内科·呼吸内科" },
+        { id: "gastro", label: "消化内科", tokenLabel: "内科·消化内科" },
+        { id: "neuro", label: "神经内科", tokenLabel: "内科·神经内科" },
+        { id: "renal", label: "肾内科", tokenLabel: "内科·肾内科" },
+        { id: "hematology", label: "血液科", tokenLabel: "内科·血液科" },
+        { id: "endocrine", label: "内分泌科", tokenLabel: "内科·内分泌科" },
+        { id: "rheumatology", label: "风湿免疫科", tokenLabel: "内科·风湿免疫科" },
+        { id: "infectious", label: "感染科", tokenLabel: "内科·感染科" },
+        { id: "geriatrics", label: "老年医学科", tokenLabel: "内科·老年医学科" },
+      ],
+    },
+    {
+      id: "surgical",
+      label: "外科",
+      hint: "10 个外科专科",
+      searchText: "普外科 骨科 神经外科 心胸外科 泌尿外科 肝胆外科 乳腺外科 血管外科 烧伤整形科 小儿外科",
+      children: [
+        { id: "general", label: "普外科", tokenLabel: "外科·普外科" },
+        { id: "orthopedics", label: "骨科", tokenLabel: "外科·骨科" },
+        { id: "neurosurgery", label: "神经外科", tokenLabel: "外科·神经外科" },
+        { id: "thoracic", label: "心胸外科", tokenLabel: "外科·心胸外科" },
+        { id: "urology", label: "泌尿外科", tokenLabel: "外科·泌尿外科" },
+        { id: "hepatobiliary", label: "肝胆外科", tokenLabel: "外科·肝胆外科" },
+        { id: "breast", label: "乳腺外科", tokenLabel: "外科·乳腺外科" },
+        { id: "vascular", label: "血管外科", tokenLabel: "外科·血管外科" },
+        { id: "plastic", label: "烧伤整形科", tokenLabel: "外科·烧伤整形科" },
+        { id: "pediatric", label: "小儿外科", tokenLabel: "外科·小儿外科" },
+      ],
+    },
+    {
+      id: "age",
+      label: "年龄段",
+      hint: "常用年龄标签",
+      searchText: "新生儿 婴儿 幼儿 学龄前 学龄期 青少年 成人 老年",
+      children: [
+        { id: "newborn", label: "新生儿", tokenLabel: "年龄段·新生儿" },
+        { id: "infant", label: "婴儿", tokenLabel: "年龄段·婴儿" },
+        { id: "toddler", label: "幼儿", tokenLabel: "年龄段·幼儿" },
+        { id: "preschool", label: "学龄前", tokenLabel: "年龄段·学龄前" },
+        { id: "school", label: "学龄期", tokenLabel: "年龄段·学龄期" },
+        { id: "teen", label: "青少年", tokenLabel: "年龄段·青少年" },
+        { id: "adult", label: "成人", tokenLabel: "年龄段·成人" },
+        { id: "elderly", label: "老年", tokenLabel: "年龄段·老年" },
+      ],
+    },
+    {
+      id: "material",
+      label: "资料类型",
+      hint: "病史、检查、化验",
+      searchText: "病史 查体 检验 影像 病理 基因 用药 家族史",
+      children: [
+        { id: "history", label: "病史", tokenLabel: "资料·病史" },
+        { id: "exam", label: "查体", tokenLabel: "资料·查体" },
+        { id: "lab", label: "检验", tokenLabel: "资料·检验" },
+        { id: "imaging", label: "影像", tokenLabel: "资料·影像" },
+        { id: "pathology", label: "病理", tokenLabel: "资料·病理" },
+        { id: "genetics", label: "基因", tokenLabel: "资料·基因" },
+        { id: "medication", label: "用药", tokenLabel: "资料·用药" },
+        { id: "family", label: "家族史", tokenLabel: "资料·家族史" },
+      ],
+    },
+    {
+      id: "urgency",
+      label: "紧急程度",
+      hint: "会诊优先级",
+      searchText: "常规 加急 危重 紧急",
+      children: [
+        { id: "routine", label: "常规", tokenLabel: "紧急程度·常规" },
+        { id: "priority", label: "加急", tokenLabel: "紧急程度·加急" },
+        { id: "critical", label: "危重", tokenLabel: "紧急程度·危重" },
+      ],
+    },
+  ];
+
+  function normalizeSearchText(value) {
+    return String(value || "").toLowerCase().replace(/\s+/g, "");
+  }
+
+  function normalizeCaseBlocks(blocks) {
+    const next = [];
+    for (const block of blocks || []) {
+      if (!block) {
+        continue;
+      }
+      if (block.type === "token") {
+        if (!block.label) {
+          continue;
+        }
+        next.push({
+          type: "token",
+          label: block.label,
+          text: block.text || `【${block.label}】`,
+          category: block.category || "",
+          value: block.value || "",
+        });
+        continue;
+      }
+      const text = String(block.text || "");
+      if (!text) {
+        continue;
+      }
+      if (next.length && next[next.length - 1].type === "text") {
+        next[next.length - 1].text += text;
+      } else {
+        next.push({ type: "text", text });
+      }
+    }
+    return next;
+  }
+
+  function blocksToPlainText(blocks) {
+    return normalizeCaseBlocks(blocks)
+      .map((block) => (block.type === "token" ? block.text : block.text))
+      .join("");
+  }
+
+  function serializeCaseBlocks(blocks) {
+    return JSON.stringify(normalizeCaseBlocks(blocks));
+  }
+
+  function createEditorTokenElement(token) {
+    const element = document.createElement("span");
+    element.className = "editor-token";
+    element.contentEditable = "false";
+    element.dataset.tokenLabel = token.label;
+    element.dataset.tokenText = token.text || `【${token.label}】`;
+    element.dataset.tokenCategory = token.category || "";
+    element.dataset.tokenValue = token.value || "";
+    element.textContent = token.label;
+    return element;
+  }
+
+  function readEditorBlocks(editor) {
+    const blocks = [];
+
+    function pushText(text) {
+      if (!text) {
+        return;
+      }
+      blocks.push({ type: "text", text });
+    }
+
+    Array.from(editor.childNodes).forEach((node, index) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        pushText(node.nodeValue || "");
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return;
+      }
+
+      const element = node;
+      if (element.classList.contains("editor-token")) {
+        blocks.push({
+          type: "token",
+          label: element.dataset.tokenLabel || element.textContent || "",
+          text: element.dataset.tokenText || `【${element.dataset.tokenLabel || element.textContent || ""}】`,
+          category: element.dataset.tokenCategory || "",
+          value: element.dataset.tokenValue || "",
+        });
+        return;
+      }
+
+      if (element.tagName === "BR") {
+        pushText("\n");
+        return;
+      }
+
+      pushText(element.textContent || "");
+      if (index < editor.childNodes.length - 1) {
+        pushText("\n");
+      }
+    });
+
+    return normalizeCaseBlocks(blocks);
+  }
+
+  function renderEditorBlocks(editor, blocks) {
+    editor.innerHTML = "";
+    normalizeCaseBlocks(blocks).forEach((block) => {
+      if (block.type === "token") {
+        editor.appendChild(createEditorTokenElement(block));
+      } else {
+        editor.appendChild(document.createTextNode(block.text));
+      }
+    });
+  }
+
+  function getSlashItems(path) {
+    let current = SLASH_MENU_TREE;
+    for (const step of path || []) {
+      const matched = current.find((item) => item.id === step);
+      if (!matched || !matched.children) {
+        return [];
+      }
+      current = matched.children;
+    }
+    return current;
+  }
+
+  function filterSlashItems(items, query) {
+    if (!query) {
+      return items;
+    }
+    const needle = normalizeSearchText(query);
+    return items.filter((item) =>
+      normalizeSearchText([item.label, item.hint, item.searchText, item.tokenLabel].filter(Boolean).join(" ")).includes(needle)
+    );
+  }
+
+  function buildSlashToken(item, path) {
+    const parents = path.map((step) => getSlashItems([]).find((root) => root.id === step)).filter(Boolean);
+    const category = parents.length ? parents[parents.length - 1].label : "";
+    const label = item.tokenLabel || (category ? `${category}·${item.label}` : item.label);
+    return {
+      type: "token",
+      label,
+      text: `【${label}】`,
+      category: category || "",
+      value: item.value || item.id || item.label,
+    };
+  }
+
+  function placeCaretAfterNode(node) {
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+    const range = document.createRange();
+    if (node.nodeType === Node.TEXT_NODE) {
+      range.setStart(node, node.nodeValue.length);
+    } else {
+      range.setStartAfter(node);
+    }
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function ensureEditorSelection(editor) {
+    const selection = window.getSelection();
+    if (!selection) {
+      return null;
+    }
+    if (!selection.rangeCount || !editor.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    return selection;
+  }
+
+  function insertPlainTextAtSelection(editor, text) {
+    const selection = ensureEditorSelection(editor);
+    if (!selection || !selection.rangeCount) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const node = document.createTextNode(text);
+    range.insertNode(node);
+    placeCaretAfterNode(node);
+    return node;
+  }
+
+  function getSlashTriggerContext(editor, wrap) {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount || !selection.isCollapsed) {
+      return null;
+    }
+
+    let node = selection.anchorNode;
+    let offset = selection.anchorOffset;
+    if (!node || !editor.contains(node)) {
+      return null;
+    }
+
+    if (node.nodeType !== Node.TEXT_NODE) {
+      if (node === editor && offset > 0) {
+        const previous = node.childNodes[offset - 1];
+        if (previous && previous.nodeType === Node.TEXT_NODE) {
+          node = previous;
+          offset = previous.nodeValue.length;
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
+
+    const textBefore = (node.nodeValue || "").slice(0, offset);
+    const slashIndex = textBefore.lastIndexOf("/");
+    if (slashIndex < 0) {
+      return null;
+    }
+
+    const query = textBefore.slice(slashIndex + 1);
+    const previousChar = slashIndex > 0 ? textBefore[slashIndex - 1] : "";
+    if (((previousChar && !/[\s\n([{（【，。,、；;:：-]/.test(previousChar)) || /\s/.test(query))) {
+      return null;
+    }
+
+    const triggerRange = document.createRange();
+    triggerRange.setStart(node, slashIndex);
+    triggerRange.setEnd(node, offset);
+    const caretRange = triggerRange.cloneRange();
+    caretRange.collapse(false);
+    const rect = caretRange.getBoundingClientRect();
+    const wrapRect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0 };
+
+    return {
+      node,
+      slashIndex,
+      endOffset: offset,
+      query,
+      position: {
+        left: Math.max(14, rect.left - wrapRect.left),
+        top: Math.max(18, rect.bottom - wrapRect.top + 12),
+      },
+    };
+  }
+
+  function removeAdjacentToken(editor, direction) {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
+      return false;
+    }
+
+    let node = selection.anchorNode;
+    let offset = selection.anchorOffset;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (direction === "backward" && offset === 0) {
+        const previous = node.previousSibling;
+        if (previous && previous.nodeType === Node.ELEMENT_NODE && previous.classList.contains("editor-token")) {
+          previous.remove();
+          return true;
+        }
+      }
+      if (direction === "forward" && offset === node.nodeValue.length) {
+        const next = node.nextSibling;
+        if (next && next.nodeType === Node.ELEMENT_NODE && next.classList.contains("editor-token")) {
+          next.remove();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (node === editor) {
+      const target = direction === "backward" ? node.childNodes[offset - 1] : node.childNodes[offset];
+      if (target && target.nodeType === Node.ELEMENT_NODE && target.classList.contains("editor-token")) {
+        target.remove();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function readAuthToken() {
     try {
       return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
@@ -102,6 +483,7 @@
   function makeDefaultComposer(meta, settings) {
     return {
       case_summary: "",
+      case_blocks: [],
       chief_complaint: "",
       patient_age: "",
       patient_sex: meta?.sex_options?.[0] || "Unknown",
@@ -599,6 +981,25 @@
   }) {
     const hasInput = composer.case_summary.trim().length > 0;
     const attachmentMenuRef = useRef(null);
+    const editorWrapRef = useRef(null);
+    const editorRef = useRef(null);
+    const slashContextRef = useRef(null);
+    const [slashMenu, setSlashMenu] = useState({
+      open: false,
+      path: [],
+      activeIndex: 0,
+      query: "",
+      position: { left: 20, top: 28 },
+    });
+    const slashItems = useMemo(() => {
+      const baseItems = getSlashItems(slashMenu.path);
+      const filtered = filterSlashItems(baseItems, slashMenu.query);
+      return filtered.length || !slashMenu.path.length ? filtered : baseItems;
+    }, [slashMenu.path, slashMenu.query]);
+    const slashPathItems = useMemo(
+      () => slashMenu.path.map((step) => SLASH_MENU_TREE.find((item) => item.id === step)).filter(Boolean),
+      [slashMenu.path]
+    );
 
     useEffect(() => {
       if (!composer.attachment_panel_open) {
@@ -615,6 +1016,117 @@
       return () => window.removeEventListener("pointerdown", handlePointerDown);
     }, [composer.attachment_panel_open, setComposer]);
 
+    useEffect(() => {
+      const editor = editorRef.current;
+      if (!editor) {
+        return;
+      }
+      const currentBlocks = serializeCaseBlocks(readEditorBlocks(editor));
+      const targetBlocks = serializeCaseBlocks(composer.case_blocks || []);
+      if (currentBlocks !== targetBlocks) {
+        renderEditorBlocks(editor, composer.case_blocks || []);
+      }
+    }, [composer.case_blocks]);
+
+    useEffect(() => {
+      if (!slashMenu.open) {
+        return undefined;
+      }
+
+      function handlePointerDown(event) {
+        if (editorWrapRef.current && !editorWrapRef.current.contains(event.target)) {
+          slashContextRef.current = null;
+          setSlashMenu((current) => ({ ...current, open: false, path: [], activeIndex: 0, query: "" }));
+        }
+      }
+
+      window.addEventListener("pointerdown", handlePointerDown);
+      return () => window.removeEventListener("pointerdown", handlePointerDown);
+    }, [slashMenu.open]);
+
+    useEffect(() => {
+      if (!slashMenu.open) {
+        return;
+      }
+      if (!slashItems.length) {
+        slashContextRef.current = null;
+        setSlashMenu((current) => ({ ...current, open: false, path: [], activeIndex: 0, query: "" }));
+        return;
+      }
+      if (slashMenu.activeIndex >= slashItems.length) {
+        setSlashMenu((current) => ({ ...current, activeIndex: 0 }));
+      }
+    }, [slashItems.length, slashMenu.activeIndex, slashMenu.open]);
+
+    function syncComposerFromEditor() {
+      const editor = editorRef.current;
+      if (!editor) {
+        return;
+      }
+      const nextBlocks = readEditorBlocks(editor);
+      const nextSummary = blocksToPlainText(nextBlocks);
+      const nextKey = serializeCaseBlocks(nextBlocks);
+      setComposer((current) => {
+        if (current.case_summary === nextSummary && serializeCaseBlocks(current.case_blocks || []) === nextKey) {
+          return current;
+        }
+        return {
+          ...current,
+          case_summary: nextSummary,
+          case_blocks: nextBlocks,
+        };
+      });
+    }
+
+    function closeSlashMenu() {
+      slashContextRef.current = null;
+      setSlashMenu((current) => ({ ...current, open: false, path: [], activeIndex: 0, query: "" }));
+    }
+
+    function refreshSlashMenu(pathOverride) {
+      const editor = editorRef.current;
+      const wrap = editorWrapRef.current;
+      if (!editor || !wrap) {
+        return;
+      }
+
+      const context = getSlashTriggerContext(editor, wrap);
+      if (!context) {
+        closeSlashMenu();
+        return;
+      }
+
+      const nextPath = pathOverride || slashMenu.path;
+      const baseItems = getSlashItems(nextPath);
+      const filteredItems = filterSlashItems(baseItems, context.query);
+      const visibleItems = filteredItems.length || !nextPath.length ? filteredItems : baseItems;
+      if (!visibleItems.length) {
+        closeSlashMenu();
+        return;
+      }
+
+      slashContextRef.current = context;
+      setSlashMenu((current) => ({
+        ...current,
+        open: true,
+        path: nextPath,
+        activeIndex: Math.min(current.activeIndex, visibleItems.length - 1),
+        query: context.query,
+        position: context.position,
+      }));
+    }
+
+    function insertEditorText(text) {
+      const editor = editorRef.current;
+      if (!editor) {
+        return;
+      }
+      editor.focus();
+      insertPlainTextAtSelection(editor, text);
+      syncComposerFromEditor();
+      window.requestAnimationFrame(() => refreshSlashMenu());
+    }
+
     async function pasteFromClipboard() {
       try {
         const text = await navigator.clipboard.readText();
@@ -622,10 +1134,7 @@
           pushNotice("未读取到剪贴板内容。", "error");
           return;
         }
-        setComposer((current) => ({
-          ...current,
-          case_summary: current.case_summary ? `${current.case_summary}\n\n${text}` : text,
-        }));
+        insertEditorText(text);
       } catch (error) {
         pushNotice("浏览器未允许剪贴板读取。", "error");
       }
@@ -651,22 +1160,209 @@
       }));
     }
 
+    function insertSlashToken(item) {
+      const editor = editorRef.current;
+      if (!editor) {
+        return;
+      }
+
+      const context = getSlashTriggerContext(editor, editorWrapRef.current) || slashContextRef.current;
+      if (!context) {
+        closeSlashMenu();
+        return;
+      }
+
+      const selection = ensureEditorSelection(editor);
+      if (!selection || !selection.rangeCount) {
+        closeSlashMenu();
+        return;
+      }
+
+      const range = document.createRange();
+      range.setStart(context.node, context.slashIndex);
+      range.setEnd(context.node, context.endOffset);
+      range.deleteContents();
+
+      const token = buildSlashToken(item, slashMenu.path);
+      const fragment = document.createDocumentFragment();
+      const tokenNode = createEditorTokenElement(token);
+      const spacer = document.createTextNode(" ");
+      fragment.appendChild(tokenNode);
+      fragment.appendChild(spacer);
+      range.insertNode(fragment);
+      placeCaretAfterNode(spacer);
+      syncComposerFromEditor();
+      closeSlashMenu();
+      editor.focus();
+    }
+
+    function handleEditorInput() {
+      syncComposerFromEditor();
+      window.requestAnimationFrame(() => refreshSlashMenu());
+    }
+
+    function handleEditorPaste(event) {
+      event.preventDefault();
+      const text = event.clipboardData?.getData("text/plain") || "";
+      if (text) {
+        insertEditorText(text);
+      }
+    }
+
+    function handleEditorKeyDown(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && hasInput && !isSubmitting) {
+        event.preventDefault();
+        onSubmit();
+        return;
+      }
+
+      if (slashMenu.open) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setSlashMenu((current) => ({
+            ...current,
+            activeIndex: slashItems.length ? (current.activeIndex + 1) % slashItems.length : 0,
+          }));
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setSlashMenu((current) => ({
+            ...current,
+            activeIndex: slashItems.length ? (current.activeIndex - 1 + slashItems.length) % slashItems.length : 0,
+          }));
+          return;
+        }
+        if (event.key === "ArrowRight" || event.key === "Enter") {
+          const activeItem = slashItems[slashMenu.activeIndex];
+          if (activeItem) {
+            event.preventDefault();
+            if (activeItem.children) {
+              setSlashMenu((current) => ({
+                ...current,
+                open: true,
+                path: [...current.path, activeItem.id],
+                activeIndex: 0,
+                query: "",
+              }));
+            } else {
+              insertSlashToken(activeItem);
+            }
+          }
+          return;
+        }
+        if (event.key === "ArrowLeft") {
+          if (slashMenu.path.length) {
+            event.preventDefault();
+            setSlashMenu((current) => ({
+              ...current,
+              path: current.path.slice(0, -1),
+              activeIndex: 0,
+              query: "",
+            }));
+          }
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeSlashMenu();
+          return;
+        }
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        insertEditorText("\n");
+        return;
+      }
+
+      if (event.key === "Backspace" && removeAdjacentToken(editorRef.current, "backward")) {
+        event.preventDefault();
+        syncComposerFromEditor();
+        window.requestAnimationFrame(() => refreshSlashMenu());
+        return;
+      }
+
+      if (event.key === "Delete" && removeAdjacentToken(editorRef.current, "forward")) {
+        event.preventDefault();
+        syncComposerFromEditor();
+        window.requestAnimationFrame(() => refreshSlashMenu());
+      }
+    }
+
     return html`
       <div className="composer-shell">
         <div className="composer-body">
-          <div className="composer-textarea-wrap">
-            <textarea
-              className="composer-textarea"
-              placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…"
-              value=${composer.case_summary}
-              onChange=${(event) => updateField("case_summary", event.target.value)}
-              onKeyDown=${(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && hasInput && !isSubmitting) {
-                  event.preventDefault();
-                  onSubmit();
+          <div className="composer-textarea-wrap" ref=${editorWrapRef}>
+            <div
+              ref=${editorRef}
+              className="composer-textarea composer-editor"
+              contentEditable=${true}
+              role="textbox"
+              aria-multiline="true"
+              spellCheck=${false}
+              data-placeholder="粘贴或输入完整病例摘要（病史、查体、检验/影像摘要等）…"
+              onInput=${handleEditorInput}
+              onPaste=${handleEditorPaste}
+              onKeyDown=${handleEditorKeyDown}
+              onClick=${() => window.requestAnimationFrame(() => refreshSlashMenu())}
+              onKeyUp=${(event) => {
+                if (!slashMenu.open && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+                  window.requestAnimationFrame(() => refreshSlashMenu());
                 }
               }}
-            ></textarea>
+            ></div>
+
+            ${slashMenu.open &&
+            slashItems.length > 0 &&
+            html`
+              <div className="slash-menu-popup" style=${{ left: `${slashMenu.position.left}px`, top: `${slashMenu.position.top}px` }}>
+                <div className="slash-menu-header">
+                  ${slashMenu.path.length
+                    ? html`
+                        <button
+                          className="slash-menu-back"
+                          type="button"
+                          onMouseDown=${(event) => event.preventDefault()}
+                          onClick=${() => setSlashMenu((current) => ({ ...current, path: current.path.slice(0, -1), activeIndex: 0, query: "" }))}
+                        >
+                          <${Icon} name="chevronLeft" size=${14} />
+                        </button>
+                        <div className="slash-menu-breadcrumb">
+                          ${slashPathItems.map((item) => html`<span key=${item.id}>${item.label}</span>`)}
+                        </div>
+                      `
+                    : html`<div className="slash-menu-title">快捷插入</div>`}
+                </div>
+
+                <div className="slash-menu-list">
+                  ${slashItems.map(
+                    (item, index) => html`
+                      <button
+                        key=${item.id}
+                        type="button"
+                        className=${cx("slash-menu-item", index === slashMenu.activeIndex && "is-active")}
+                        onMouseDown=${(event) => event.preventDefault()}
+                        onMouseEnter=${() => setSlashMenu((current) => ({ ...current, activeIndex: index }))}
+                        onClick=${() => {
+                          if (item.children) {
+                            setSlashMenu((current) => ({ ...current, path: [...current.path, item.id], activeIndex: 0, query: "" }));
+                          } else {
+                            insertSlashToken(item);
+                          }
+                        }}
+                      >
+                        <div className="slash-menu-copy">
+                          <span className="slash-menu-label">${item.label}</span>
+                          ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
+                        </div>
+                        ${item.children && html`<span className="slash-menu-arrow">›</span>`}
+                      </button>
+                    `
+                  )}
+                </div>
+              </div>
+            `}
           </div>
 
           ${composer.input_expanded &&
