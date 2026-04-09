@@ -1,5 +1,5 @@
 (function () {
-  const { useEffect, useMemo, useState } = React;
+  const { useEffect, useMemo, useRef, useState } = React;
   const html = htm.bind(React.createElement);
 
   const ICON_PATHS = {
@@ -152,78 +152,61 @@
   function BrandGlyph({ className = "" }) {
     return html`
       <svg className=${className} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <g transform="rotate(-30 22.8 15.2)">
+          <path
+            d="M22.8 15.2V7.6"
+            stroke="rgba(255,255,255,0.97)"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+          ></path>
+          <path
+            d="M16.2 7.6h13.2"
+            stroke="rgba(255,255,255,0.97)"
+            strokeWidth="2.8"
+            strokeLinecap="round"
+          ></path>
+          <circle
+            cx="22.8"
+            cy="7.6"
+            r="2.1"
+            fill="rgba(255,255,255,0.97)"
+            stroke="rgba(255,255,255,0.97)"
+            strokeWidth="1.8"
+          ></circle>
+        </g>
         <path
-          d="M22.8 15.2V8"
-          stroke="#2b3645"
-          strokeWidth="2.6"
-          strokeLinecap="round"
-        ></path>
-        <path
-          d="M16.4 8h12.8"
-          stroke="#2b3645"
-          strokeWidth="2.8"
-          strokeLinecap="round"
-        ></path>
-        <circle
-          cx="22.8"
-          cy="8"
-          r="2.1"
-          fill="rgba(255,255,255,0.97)"
-          stroke="#2b3645"
-          strokeWidth="1.8"
-        ></circle>
-        <path
-          d="M18.7 17.8 14.3 11.2l8.1 4.6-1.9 5.5z"
-          fill="rgba(255,255,255,0.97)"
-          stroke="#2b3645"
-          strokeWidth="2"
-          strokeLinejoin="round"
-        ></path>
-        <path
-          d="M17 26.5c0-8.4 6.3-14.5 15-14.5h8.6c7.2 0 13.7 2.5 18.5 6.8l-8.8 2.6H36.2c-1.8 0-3 .8-3 1.8 0 1.1 1 1.8 2.4 1.8H60c1.1 0 2 .9 2 2s-.9 2-2 2H35.6c-1.4 0-2.4.7-2.4 1.8 0 1 .9 1.8 2.9 1.8h14.2l8.8 2.6c-4.8 4.3-11.3 6.8-18.5 6.8H32c-8.7 0-15-6.1-15-14.5Z"
+          d="M18.2 26.6c0-8.4 6.4-14.6 15.2-14.6h7.8c7.1 0 13.8 2.5 18.8 6.8l-9.4 2.6H37.4c-2 0-3.2.8-3.2 1.9s1.2 1.8 2.7 1.8H60c1.1 0 2 .9 2 2s-.9 2-2 2H36.9c-1.5 0-2.7.8-2.7 1.8s1.2 1.9 3.2 1.9h13.2l9.4 2.6c-5 4.3-11.7 6.8-18.8 6.8h-7.8c-8.8 0-15.2-6.2-15.2-14.6Z"
           fill="rgba(255,255,255,0.97)"
           stroke="#2b3645"
           strokeWidth="2.2"
           strokeLinejoin="round"
         ></path>
+        <ellipse cx="29.1" cy="20.6" rx="4.6" ry="4.1" fill="#2b3645"></ellipse>
+        <circle cx="27.8" cy="19.2" r="1.08" fill="rgba(255,255,255,0.94)"></circle>
         <path
-          d="M23.8 17.2c4.3-1.5 8.8-1.4 13 .2"
-          stroke="#2b3645"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-        ></path>
-        <ellipse cx="29.1" cy="20.7" rx="4.6" ry="4.1" fill="#2b3645"></ellipse>
-        <circle cx="27.8" cy="19.4" r="1.08" fill="rgba(255,255,255,0.94)"></circle>
-        <path
-          d="M41.8 28.1h15.1"
-          stroke="#2b3645"
-          strokeWidth="2"
-          strokeLinecap="round"
-        ></path>
-        <path
-          d="M45 28.1 46.8 30.5 48.6 28.1 50.4 30.5 52.2 28.1 54 30.5"
+          d="M40.6 28.5c4.9-.4 9.9-.4 14.8 0M45 28.7l1.4 1.8M48.5 28.6l1.4 1.8M52 28.6l1.4 1.7"
           stroke="#2b3645"
           strokeWidth="1.9"
           strokeLinecap="round"
           strokeLinejoin="round"
         ></path>
-        <circle cx="52.7" cy="24.7" r="1.6" fill="#2b3645"></circle>
+        <circle cx="53.6" cy="24.5" r="1.6" fill="#2b3645"></circle>
         <path
-          d="M19.4 58V48.7c0-6 4.9-10.7 10.8-10.7h4.4c6 0 10.8 4.7 10.8 10.7V58"
+          d="M19.4 58V48.8c0-6 4.8-10.8 10.8-10.8h4.4c6 0 10.8 4.8 10.8 10.8V58"
           fill="rgba(255,255,255,0.97)"
           stroke="#2b3645"
           strokeWidth="2"
           strokeLinejoin="round"
         ></path>
         <path
-          d="M32.2 38.8V58"
+          d="M32.2 39V58"
           stroke="#2b3645"
           strokeWidth="2"
           strokeLinecap="round"
         ></path>
-        <circle cx="41.4" cy="47.9" r="5.2" fill="#2b3645"></circle>
+        <circle cx="41.4" cy="47.9" r="5.3" fill="#2b3645"></circle>
         <path
-          d="M41.4 45.4v5M38.9 47.9h5"
+          d="M41.4 45.3v5.2M38.8 47.9h5.2"
           stroke="rgba(255,255,255,0.98)"
           strokeWidth="2.1"
           strokeLinecap="round"
@@ -615,6 +598,22 @@
     pushNotice,
   }) {
     const hasInput = composer.case_summary.trim().length > 0;
+    const attachmentMenuRef = useRef(null);
+
+    useEffect(() => {
+      if (!composer.attachment_panel_open) {
+        return undefined;
+      }
+
+      function handlePointerDown(event) {
+        if (attachmentMenuRef.current && !attachmentMenuRef.current.contains(event.target)) {
+          setComposer((current) => ({ ...current, attachment_panel_open: false }));
+        }
+      }
+
+      window.addEventListener("pointerdown", handlePointerDown);
+      return () => window.removeEventListener("pointerdown", handlePointerDown);
+    }, [composer.attachment_panel_open, setComposer]);
 
     async function pasteFromClipboard() {
       try {
@@ -637,7 +636,19 @@
     }
 
     function handleFiles(key, fileList) {
-      updateField(key, Array.from(fileList || []));
+      setComposer((current) => ({
+        ...current,
+        [key]: Array.from(fileList || []),
+        attachment_panel_open: false,
+        attachment_epoch: Date.now(),
+      }));
+    }
+
+    function removeFile(key, index) {
+      setComposer((current) => ({
+        ...current,
+        [key]: current[key].filter((_, itemIndex) => itemIndex !== index),
+      }));
     }
 
     return html`
@@ -713,38 +724,47 @@
             </div>
           `}
 
-          ${composer.attachment_panel_open &&
-          html`
-            <div className="attachment-panel">
-              <div className="panel-title">附件</div>
-              <div className="attachment-grid">
-                <label className="uploader" key=${`images-${composer.attachment_epoch}`}>
-                  <div className="sidebar-footer-name">上传影像</div>
-                  <div className="sidebar-footer-copy">PNG / JPG / WEBP</div>
-                  <input type="file" accept=".png,.jpg,.jpeg,.webp" multiple onChange=${(event) => handleFiles("image_files", event.target.files)} />
-                </label>
-                <label className="uploader" key=${`docs-${composer.attachment_epoch}`}>
-                  <div className="sidebar-footer-name">上传文档</div>
-                  <div className="sidebar-footer-copy">PDF / TXT / DOCX</div>
-                  <input type="file" accept=".pdf,.txt,.docx" multiple onChange=${(event) => handleFiles("doc_files", event.target.files)} />
-                </label>
-              </div>
-              ${(composer.image_files.length || composer.doc_files.length) &&
+          <div className="composer-controls">
+            <div className="attachment-menu-anchor" ref=${attachmentMenuRef}>
+              <button
+                className=${cx("icon-button", composer.attachment_panel_open && "is-active")}
+                onClick=${() => updateField("attachment_panel_open", !composer.attachment_panel_open)}
+                aria-label="Toggle attachments"
+              >
+                <${Icon} name="plus" size=${24} />
+              </button>
+
+              ${composer.attachment_panel_open &&
               html`
-                <div className="file-chips">
-                  ${composer.image_files.map((file) => html`<span key=${`img-${file.name}`} className="file-chip">${file.name}</span>`)}
-                  ${composer.doc_files.map((file) => html`<span key=${`doc-${file.name}`} className="file-chip">${file.name}</span>`)}
+                <div className="attachment-menu" role="menu" aria-label="附件菜单">
+                  <label className="attachment-menu-item" key=${`images-${composer.attachment_epoch}`}>
+                    <span className="attachment-menu-label">上传影像</span>
+                    <span className="attachment-menu-copy">PNG / JPG / WEBP</span>
+                    <input
+                      className="attachment-menu-input"
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp"
+                      multiple
+                      onChange=${(event) => handleFiles("image_files", event.target.files)}
+                    />
+                  </label>
+
+                  <label className="attachment-menu-item" key=${`docs-${composer.attachment_epoch}`}>
+                    <span className="attachment-menu-label">上传文档</span>
+                    <span className="attachment-menu-copy">PDF / TXT / DOCX</span>
+                    <input
+                      className="attachment-menu-input"
+                      type="file"
+                      accept=".pdf,.txt,.docx"
+                      multiple
+                      onChange=${(event) => handleFiles("doc_files", event.target.files)}
+                    />
+                  </label>
                 </div>
               `}
             </div>
-          `}
 
-          <div className="composer-controls">
-            <button className="icon-button" onClick=${() => updateField("attachment_panel_open", !composer.attachment_panel_open)} aria-label="Toggle attachments">
-              <${Icon} name="plus" size=${24} />
-            </button>
-
-            <div className="composer-status">${composer.attachment_panel_open ? "附件面板已展开" : "Command + Enter 提交病例"}</div>
+            <div className="composer-status">${composer.attachment_panel_open ? "附件菜单已展开" : "Command + Enter 提交病例"}</div>
 
             <button
               className=${cx("toggle-pill", "tooltip-button", composer.input_expanded && "is-on")}
@@ -774,6 +794,42 @@
               </button>
             </div>
           </div>
+
+          ${Boolean(composer.image_files.length || composer.doc_files.length) &&
+          html`
+            <div className="file-chips">
+              ${composer.image_files.map(
+                (file, index) => html`
+                  <span key=${`img-${file.name}-${index}`} className="file-chip">
+                    <span className="file-chip-name">${file.name}</span>
+                    <button
+                      className="file-chip-remove"
+                      onClick=${() => removeFile("image_files", index)}
+                      aria-label=${`移除附件 ${file.name}`}
+                      type="button"
+                    >
+                      <${Icon} name="close" size=${12} />
+                    </button>
+                  </span>
+                `
+              )}
+              ${composer.doc_files.map(
+                (file, index) => html`
+                  <span key=${`doc-${file.name}-${index}`} className="file-chip">
+                    <span className="file-chip-name">${file.name}</span>
+                    <button
+                      className="file-chip-remove"
+                      onClick=${() => removeFile("doc_files", index)}
+                      aria-label=${`移除附件 ${file.name}`}
+                      type="button"
+                    >
+                      <${Icon} name="close" size=${12} />
+                    </button>
+                  </span>
+                `
+              )}
+            </div>
+          `}
         </div>
       </div>
     `;

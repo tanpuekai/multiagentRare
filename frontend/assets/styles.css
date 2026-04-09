@@ -1583,8 +1583,8 @@ a {
 .composer-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
+  gap: 8px;
+  padding: 10px 18px 14px;
 }
 
 .composer-textarea-wrap {
@@ -1593,6 +1593,65 @@ a {
   border: 0;
   box-shadow: none;
   overflow: hidden;
+}
+
+.attachment-menu-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.attachment-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.98);
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(14px);
+  z-index: 16;
+}
+
+.attachment-menu-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--transition), transform var(--transition);
+}
+
+.attachment-menu-item:hover {
+  background: rgba(226, 232, 240, 0.56);
+  transform: translateY(-1px);
+}
+
+.attachment-menu-label {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.attachment-menu-copy {
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+
+.attachment-menu-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .composer-textarea {
@@ -1639,17 +1698,58 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 4px;
 }
 
 .file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(320px, 42vw);
   border-radius: 999px;
-  padding: 7px 10px;
+  padding: 7px 8px 7px 12px;
   font-size: 0.78rem;
   font-weight: 600;
   background: rgba(255,255,255,0.96);
   border: 1px solid var(--border-soft);
   color: var(--text-subtle);
+}
+
+.file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-remove {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  padding: 0;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  color: rgba(15, 23, 42, 0.76);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.88);
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease, background var(--transition), color var(--transition);
+}
+
+.file-chip:hover .file-chip-remove,
+.file-chip:focus-within .file-chip-remove {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.file-chip-remove:hover {
+  background: rgba(203, 213, 225, 0.8);
+  color: rgba(15, 23, 42, 0.88);
 }
 
 .composer-controls {
@@ -1670,6 +1770,12 @@ a {
 .composer-controls .icon-button,
 .composer-controls .send-button:not(.is-ready) {
   color: rgba(15, 23, 42, 0.66);
+}
+
+.composer-controls .icon-button.is-active {
+  background: rgba(226, 232, 240, 0.68);
+  box-shadow: none;
+  border-color: transparent;
 }
 
 .toggle-pill {
@@ -1910,6 +2016,11 @@ a {
   .composer-controls {
     grid-template-columns: auto auto auto auto auto;
     justify-content: flex-start;
+  }
+
+  .attachment-menu {
+    left: 0;
+    min-width: 196px;
   }
 
   .composer-status {
