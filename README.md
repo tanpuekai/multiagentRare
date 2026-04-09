@@ -39,6 +39,10 @@ Or, if you are using the local `.venv` created in this folder:
 - Diagnostic and treatment style outputs with coding, cost estimates, references, and convergence rounds
 - Local session history stored on disk
 
+## Design Docs
+
+- [Rare Disease Multi-Agent Framework Design](docs/agent-framework-design.md)
+
 ## Notes
 
 - The legacy Streamlit app remains in the repository, but the main local entrypoint now serves the React frontend from `server.py`.
