@@ -174,6 +174,9 @@
     onLogout,
     sidebarCollapsed,
     onToggleSidebar,
+    showDiagnosticsToggle,
+    diagnosticsOpen,
+    onToggleDiagnostics,
     settingsMenuOpen,
     onToggleSettingsMenu,
   }) {
@@ -183,9 +186,26 @@
       <aside className="shell-sidebar">
         <div className="sidebar-inner">
           <div className="sidebar-toolbar">
-            <button className="sidebar-toggle-button" onClick=${onToggleSidebar} aria-label=${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>
+            <button
+              className=${cx("tooltip-button", "sidebar-toggle-button")}
+              onClick=${onToggleSidebar}
+              aria-label=${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+              data-tooltip=${sidebarCollapsed ? "展开" : "收合"}
+            >
               <${Icon} name="panelToggle" size=${27} className=${cx("sidebar-toggle-icon", sidebarCollapsed && "is-collapsed")} />
             </button>
+
+            ${showDiagnosticsToggle &&
+            html`
+              <button
+                className=${cx("tooltip-button", "sidebar-diagnostics-button", diagnosticsOpen && "is-active")}
+                onClick=${onToggleDiagnostics}
+                aria-label="诊断面板"
+                data-tooltip="诊断面板"
+              >
+                <${Icon} name="diagnostics" size=${27} />
+              </button>
+            `}
           </div>
 
           <div className="sidebar-brand">
@@ -229,7 +249,12 @@
                   ${currentUser?.username || ""}${profile?.title ? ` · ${profile.title}` : ""}${profile?.department ? ` · ${label(meta, "department", profile.department)}` : ""}
                 </div>
               </div>
-              <button className=${cx("sidebar-settings-button", settingsMenuOpen && "is-active")} onClick=${onToggleSettingsMenu} aria-label="Settings menu">
+              <button
+                className=${cx("tooltip-button", "sidebar-settings-button", settingsMenuOpen && "is-active")}
+                onClick=${onToggleSettingsMenu}
+                aria-label="Settings menu"
+                data-tooltip="系统设置"
+              >
                 <${Icon} name="settings" size=${26} />
               </button>
             </div>
@@ -1727,6 +1752,9 @@
             setSettingsMenuOpen(false);
             setSidebarCollapsed((current) => !current);
           }}
+          showDiagnosticsToggle=${activeView === "workspace"}
+          diagnosticsOpen=${diagnosticsOpen}
+          onToggleDiagnostics=${() => setDiagnosticsOpen((current) => !current)}
           settingsMenuOpen=${settingsMenuOpen}
           onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
         />
@@ -1787,17 +1815,6 @@
               `}
             </main>
 
-            ${activeView === "workspace" && !diagnosticsOpen &&
-            html`
-              <button
-                className=${cx("tooltip-button", "diagnostics-toggle-button")}
-                onClick=${() => setDiagnosticsOpen((current) => !current)}
-                aria-label="诊断面板"
-                data-tooltip="诊断面板"
-              >
-                <${Icon} name="diagnostics" size=${27} />
-              </button>
-            `}
           </div>
 
           ${activeView === "workspace" &&
