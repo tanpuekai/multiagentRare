@@ -149,6 +149,89 @@
     `;
   }
 
+  function BrandGlyph({ className = "" }) {
+    return html`
+      <svg className=${className} viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path
+          d="M22.8 15.2V8"
+          stroke="#2b3645"
+          strokeWidth="2.6"
+          strokeLinecap="round"
+        ></path>
+        <path
+          d="M16.4 8h12.8"
+          stroke="#2b3645"
+          strokeWidth="2.8"
+          strokeLinecap="round"
+        ></path>
+        <circle
+          cx="22.8"
+          cy="8"
+          r="2.1"
+          fill="rgba(255,255,255,0.97)"
+          stroke="#2b3645"
+          strokeWidth="1.8"
+        ></circle>
+        <path
+          d="M18.7 17.8 14.3 11.2l8.1 4.6-1.9 5.5z"
+          fill="rgba(255,255,255,0.97)"
+          stroke="#2b3645"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        ></path>
+        <path
+          d="M17 26.5c0-8.4 6.3-14.5 15-14.5h8.6c7.2 0 13.7 2.5 18.5 6.8l-8.8 2.6H36.2c-1.8 0-3 .8-3 1.8 0 1.1 1 1.8 2.4 1.8H60c1.1 0 2 .9 2 2s-.9 2-2 2H35.6c-1.4 0-2.4.7-2.4 1.8 0 1 .9 1.8 2.9 1.8h14.2l8.8 2.6c-4.8 4.3-11.3 6.8-18.5 6.8H32c-8.7 0-15-6.1-15-14.5Z"
+          fill="rgba(255,255,255,0.97)"
+          stroke="#2b3645"
+          strokeWidth="2.2"
+          strokeLinejoin="round"
+        ></path>
+        <path
+          d="M23.8 17.2c4.3-1.5 8.8-1.4 13 .2"
+          stroke="#2b3645"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+        ></path>
+        <ellipse cx="29.1" cy="20.7" rx="4.6" ry="4.1" fill="#2b3645"></ellipse>
+        <circle cx="27.8" cy="19.4" r="1.08" fill="rgba(255,255,255,0.94)"></circle>
+        <path
+          d="M41.8 28.1h15.1"
+          stroke="#2b3645"
+          strokeWidth="2"
+          strokeLinecap="round"
+        ></path>
+        <path
+          d="M45 28.1 46.8 30.5 48.6 28.1 50.4 30.5 52.2 28.1 54 30.5"
+          stroke="#2b3645"
+          strokeWidth="1.9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        ></path>
+        <circle cx="52.7" cy="24.7" r="1.6" fill="#2b3645"></circle>
+        <path
+          d="M19.4 58V48.7c0-6 4.9-10.7 10.8-10.7h4.4c6 0 10.8 4.7 10.8 10.7V58"
+          fill="rgba(255,255,255,0.97)"
+          stroke="#2b3645"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        ></path>
+        <path
+          d="M32.2 38.8V58"
+          stroke="#2b3645"
+          strokeWidth="2"
+          strokeLinecap="round"
+        ></path>
+        <circle cx="41.4" cy="47.9" r="5.2" fill="#2b3645"></circle>
+        <path
+          d="M41.4 45.4v5M38.9 47.9h5"
+          stroke="rgba(255,255,255,0.98)"
+          strokeWidth="2.1"
+          strokeLinecap="round"
+        ></path>
+      </svg>
+    `;
+  }
+
   function NoticeStack({ notices }) {
     return html`
       <div className="notice-stack">
@@ -209,7 +292,7 @@
           </div>
 
           <div className="sidebar-brand">
-            <div className="brand-mark">R</div>
+            <div className="brand-mark"><${BrandGlyph} className="brand-mark-glyph" /></div>
             <div className="brand-text">
               <div className="brand-name">RareMDT</div>
               <div className="brand-copy">罕见病多智能体诊疗系统</div>
@@ -309,6 +392,39 @@
           <div className="panel-title">历史摘要</div>
           <p style=${{ margin: 0 }}>该记录来自旧版历史摘要，暂未保存完整诊断面板与多智能体过程数据。</p>
         </div>
+      </div>
+    `;
+  }
+
+  function EmptyWorkspaceWordmark() {
+    return html`
+      <div className="empty-workspace-mark" aria-hidden="true">
+        <svg className="empty-wordmark" viewBox="0 0 1200 240" role="img" aria-label="港大智多星">
+          <defs>
+            <filter id="wordmark-soft-shadow" x="-12%" y="-40%" width="124%" height="180%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="3.2" result="blur"></feGaussianBlur>
+              <feOffset dy="4" result="offsetBlur"></feOffset>
+              <feColorMatrix
+                in="offsetBlur"
+                type="matrix"
+                values="0 0 0 0 0.11 0 0 0 0 0.14 0 0 0 0 0.19 0 0 0 0.08 0"
+              ></feColorMatrix>
+              <feMerge>
+                <feMergeNode></feMergeNode>
+                <feMergeNode in="SourceGraphic"></feMergeNode>
+              </feMerge>
+            </filter>
+          </defs>
+          <text x="600" y="95" textAnchor="middle" dominantBaseline="middle" className="empty-wordmark-highlight">
+            港大智多星
+          </text>
+          <text x="600" y="90" textAnchor="middle" dominantBaseline="middle" className="empty-wordmark-text" filter="url(#wordmark-soft-shadow)">
+            港大智多星
+          </text>
+          <text x="600" y="164" textAnchor="middle" dominantBaseline="middle" className="empty-wordmark-subtitle">
+            Multi-agent Platform for Rare Diseases
+          </text>
+        </svg>
       </div>
     `;
   }
@@ -769,7 +885,7 @@
       <div className="login-shell">
         <div className="login-card">
           <div className="login-brand">
-            <div className="brand-mark">R</div>
+            <div className="brand-mark"><${BrandGlyph} className="brand-mark-glyph" /></div>
             <div>
               <div className="brand-name">RareMDT</div>
               <div className="brand-copy">罕见病多智能体诊疗系统</div>
@@ -1762,6 +1878,7 @@
         <div className=${cx("workspace-region", activeView === "workspace" && diagnosticsOpen && "diagnostics-open")}>
           <div className="main-stage">
             <main className="shell-main">
+              ${activeView === "workspace" && !currentSession && html`<${EmptyWorkspaceWordmark} />`}
               <div className="main-scroll">
                 ${activeView === "settings"
                   ? html`

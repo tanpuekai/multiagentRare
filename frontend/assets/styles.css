@@ -287,6 +287,12 @@ a {
   flex: 0 0 auto;
 }
 
+.brand-mark-glyph {
+  width: 36px;
+  height: 36px;
+  display: block;
+}
+
 .brand-text {
   min-width: 0;
   display: flex;
@@ -754,6 +760,7 @@ a {
   position: relative;
   --workspace-inline-padding: 24px;
   --composer-inline-offset: 8px;
+  --empty-workspace-floor: 232px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -932,6 +939,54 @@ a {
   flex-direction: column;
   gap: 18px;
   min-height: 100%;
+}
+
+.empty-workspace-mark {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: var(--empty-workspace-floor);
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  transform: translateY(-10px);
+  pointer-events: none;
+}
+
+.empty-wordmark {
+  width: min(78vw, 980px);
+  height: clamp(124px, 20vh, 196px);
+  overflow: visible;
+}
+
+.empty-wordmark-text,
+.empty-wordmark-highlight {
+  font-family: "Noto Serif SC", "Songti SC", "STSong", "Source Han Serif SC", "PMingLiU", serif;
+  font-size: 50px;
+  font-weight: 600;
+  letter-spacing: 10px;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleY(0.95);
+}
+
+.empty-wordmark-highlight {
+  fill: rgba(255, 255, 255, 0.62);
+}
+
+.empty-wordmark-text {
+  fill: #596474;
+}
+
+.empty-wordmark-subtitle {
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: 3.6px;
+  fill: #596474;
 }
 
 .empty-feed {
@@ -1278,6 +1333,11 @@ a {
   height: 52px;
   border-radius: 16px;
   font-size: 1.6rem;
+}
+
+.login-brand .brand-mark-glyph {
+  width: 42px;
+  height: 42px;
 }
 
 .login-brand .brand-copy {
@@ -1822,6 +1882,7 @@ a {
     border-radius: 0;
     --workspace-inline-padding: 18px;
     --composer-inline-offset: 6px;
+    --empty-workspace-floor: 214px;
   }
 
   .diagnostics-toggle-button {
@@ -1853,6 +1914,27 @@ a {
 
   .composer-status {
     display: none;
+  }
+
+  .empty-workspace-mark {
+    padding: 0 18px;
+    transform: translateY(-8px);
+  }
+
+  .empty-wordmark {
+    width: min(88vw, 760px);
+    height: clamp(108px, 18vh, 164px);
+  }
+
+  .empty-wordmark-text,
+  .empty-wordmark-highlight {
+    font-size: 40px;
+    letter-spacing: 6px;
+  }
+
+  .empty-wordmark-subtitle {
+    font-size: 38px;
+    letter-spacing: 2.6px;
   }
 
   .login-shell {
