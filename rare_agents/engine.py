@@ -246,6 +246,8 @@ def run_single_model_case(
     role_name: str,
     role_spec: str,
     generated_answer: str,
+    raw_provider_request: str = "",
+    raw_provider_payload: str = "",
 ) -> EngineResult:
     references = normalize_refs(submission.department)
     title = f"{build_title(submission)} · 单模型测试"
@@ -253,7 +255,9 @@ def run_single_model_case(
         f"当前已切换为单模型测试模式，由 {provider_name} / {model_name} 基于首个 Agent Role"
         f"（{role_name}）直接生成临床草案，未执行多智能体收敛流程。"
     )
-    answer = generated_answer.strip() or build_professional_answer(submission, profile)
+    raw_model_text = generated_answer.strip()
+    answer = raw_model_text or build_professional_answer(submission, profile)
+    answer_source = "provider" if raw_model_text else "fallback_template"
     next_steps = [
         "当前结果来自单模型直出，建议仅用于接口连通性与草案风格测试。",
         "如需正式会诊结论，请关闭单模型测试并重新运行多智能体路径。",
@@ -295,4 +299,8 @@ def run_single_model_case(
         execution_mode="single_model",
         serving_provider=provider_name,
         serving_model=model_name,
+        answer_source=answer_source,
+        raw_model_text=raw_model_text,
+        raw_provider_request=raw_provider_request,
+        raw_provider_payload=raw_provider_payload,
     )

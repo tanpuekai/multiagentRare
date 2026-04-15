@@ -119,6 +119,10 @@ class EngineResult:
     execution_mode: str = "multi_agent"
     serving_provider: str = ""
     serving_model: str = ""
+    answer_source: str = ""
+    raw_model_text: str = ""
+    raw_provider_request: str = ""
+    raw_provider_payload: str = ""
 
 
 @dataclass

@@ -1,6 +1,15 @@
-(function () {
-  const { useEffect, useMemo, useRef, useState } = React;
-  const html = htm.bind(React.createElement);
+import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/react@18.3.1";
+import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+import htm from "https://esm.sh/htm@3.1.1";
+import { marked } from "https://esm.sh/marked@12.0.2";
+import DOMPurify from "https://esm.sh/dompurify@3.1.6";
+import {
+  AssistantRuntimeProvider,
+  ThreadPrimitive,
+  useExternalStoreRuntime,
+} from "https://esm.sh/@assistant-ui/react@0.12.24?bundle&deps=react@18.3.1,react-dom@18.3.1";
+
+const html = htm.bind(React.createElement);
 
   const ICON_PATHS = {
     plus: "M12 5v14M5 12h14",
@@ -828,52 +837,416 @@
     `;
   }
 
-  function ExecutionStatusCard({ executionMode, providerName, modelName, isPending = false }) {
-    if (executionMode !== "single_model") {
-      return null;
+  function getThreadMessageText(message) {
+    return (message?.content || [])
+      .filter((part) => part?.type === "text" || part?.type === "reasoning")
+      .map((part) => String(part.text || ""))
+      .join("\n\n")
+      .trim();
+  }
+
+  function makeThreadMessage({ id, role, text = "", createdAt = "", metadata = {} }) {
+    return {
+      id,
+      role,
+      createdAt: createdAt || undefined,
+      content: text ? [{ type: "text", text }] : [],
+      metadata: { custom: metadata },
+    };
+  }
+
+  function buildConversationState(session, pendingSubmission) {
+    if (pendingSubmission) {
+      const messages = [
+        makeThreadMessage({
+          id: "pending-user",
+          role: "user",
+          text: pendingSubmission.case_summary,
+          createdAt: pendingSubmission.timestamp,
+          metadata: {
+            kind: "submission",
+            timestamp: pendingSubmission.timestamp,
+          },
+        }),
+      ];
+
+      if (pendingSubmission.execution?.mode === "single_model") {
+        messages.push(
+          makeThreadMessage({
+            id: "pending-execution-status",
+            role: "assistant",
+            createdAt: pendingSubmission.timestamp,
+            metadata: {
+              kind: "execution-status",
+              pending: true,
+              executionMode: "single_model",
+              providerName: pendingSubmission.execution.providerName || "未配置",
+              modelName: pendingSubmission.execution.modelName || "未配置模型",
+            },
+          })
+        );
+      }
+
+      return { messages, isRunning: true };
     }
 
+    if (!session) {
+      return { messages: [], isRunning: false };
+    }
+
+    if (!session.result || !session.submission) {
+      return {
+        messages: [
+          makeThreadMessage({
+            id: `legacy-${session.session_id}`,
+            role: "assistant",
+            text: session.summary || "该记录来自旧版历史摘要，暂未保存完整诊断面板与多智能体过程数据。",
+            createdAt: session.timestamp,
+            metadata: {
+              kind: "legacy-summary",
+              session,
+            },
+          }),
+        ],
+        isRunning: false,
+      };
+    }
+
+    const messages = [
+      makeThreadMessage({
+        id: `submission-${session.session_id}`,
+        role: "user",
+        text: session.submission.case_summary,
+        createdAt: session.timestamp,
+        metadata: {
+          kind: "submission",
+          timestamp: session.timestamp,
+        },
+      }),
+    ];
+
+    if (session.result.execution_mode === "single_model") {
+      messages.push(
+        makeThreadMessage({
+          id: `status-${session.session_id}`,
+          role: "assistant",
+          createdAt: session.timestamp,
+          metadata: {
+            kind: "execution-status",
+            pending: false,
+            executionMode: "single_model",
+            providerName: session.result.serving_provider || "未配置",
+            modelName: session.result.serving_model || "未配置模型",
+          },
+        })
+      );
+    }
+
+    messages.push(
+      makeThreadMessage({
+        id: `result-${session.session_id}`,
+        role: "assistant",
+        text: session.result.professional_answer || "",
+        createdAt: session.timestamp,
+        metadata: {
+          kind: "result",
+          timestamp: session.timestamp,
+          result: session.result,
+        },
+      })
+    );
+
+    return { messages, isRunning: false };
+  }
+
+  function ConversationThreadHeader() {
     return html`
-      <div className=${cx("status-card", isPending && "is-pending")}>
-        <div className="status-card-title">单模型测试已启用</div>
-        <div className="status-card-copy">${providerName} / ${modelName}</div>
+      <div className="assistant-thread-head">
+        <div className="assistant-thread-head-title">RareMDT Conversation</div>
+        <div className="assistant-thread-head-chip">Assistant-UI Thread</div>
       </div>
     `;
   }
 
-  function PendingWorkspace({ submission, execution }) {
-    if (!submission) {
-      return null;
-    }
+  function ConversationUserMessage({ message }) {
+    const custom = message?.metadata?.custom || {};
+    const text = getThreadMessageText(message);
 
     return html`
-      <div className="workspace-feed">
-        <div className="message-card message-user">
-          <div className="message-meta">
-            <span>病例输入</span>
-            <span>·</span>
-            <span>${formatTimestamp(submission.timestamp)}</span>
+      <div className="thread-message thread-message-user">
+        <div className="thread-row thread-row-user">
+          <div className="thread-bubble thread-bubble-user">
+            <div className="thread-message-meta">
+              <span>病例输入</span>
+              <span>·</span>
+              <span>${formatTimestamp(custom.timestamp || message.createdAt || "")}</span>
+            </div>
+            <div className="thread-message-text">${text}</div>
           </div>
-          <div className="message-body">${submission.case_summary}</div>
+          <div className="thread-avatar thread-avatar-user">你</div>
         </div>
+      </div>
+    `;
+  }
 
-        <${ExecutionStatusCard}
-          executionMode=${execution?.mode}
-          providerName=${execution?.providerName || "未配置"}
-          modelName=${execution?.modelName || "未配置模型"}
-          isPending=${true}
-        />
+  function ConversationExecutionStatus({ custom }) {
+    return html`
+      <div className="thread-message thread-message-status">
+        <div className="thread-row">
+          <div className="thread-avatar thread-avatar-assistant">AI</div>
+          <div className=${cx("thread-status-pill", custom.pending && "is-pending")}>
+            <div className="thread-status-label">单模型测试已启用</div>
+            <div className="thread-status-value">${custom.providerName} / ${custom.modelName}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
-        <div className="result-card pending-result-card">
-          <div className="result-head">
-            <div>
-              <div className="result-title">正在生成结果</div>
-              <div className="result-summary">请求已提交，系统正在处理当前病例并准备回填临床结论。</div>
+  function ConversationThinkingMessage() {
+    return html`
+      <div className="thread-message thread-message-assistant">
+        <div className="thread-row">
+          <div className="thread-avatar thread-avatar-assistant">AI</div>
+          <div className="thread-bubble thread-bubble-assistant thread-bubble-thinking">
+            <div className="thread-message-meta">
+              <span>RareMDT Assistant</span>
+              <span>·</span>
+              <span>正在分析</span>
+            </div>
+            <div className="thread-thinking-row">
+              <span className="thread-thinking-dot"></span>
+              <span className="thread-thinking-dot"></span>
+              <span className="thread-thinking-dot"></span>
+              <span className="thread-thinking-copy">系统正在整理临床判断与诊疗建议…</span>
             </div>
           </div>
         </div>
       </div>
     `;
+  }
+
+  function ConversationLegacySummary({ session, meta }) {
+    return html`
+      <div className="thread-message thread-message-assistant">
+        <div className="thread-row">
+          <div className="thread-avatar thread-avatar-assistant">AI</div>
+          <div className="thread-bubble thread-bubble-assistant">
+            <div className="thread-message-meta">
+              <span>RareMDT Assistant</span>
+              <span>·</span>
+              <span>${formatTimestamp(session.timestamp)}</span>
+            </div>
+            <div className="thread-response-shell">
+              <div className="thread-response-head">
+                <div>
+                  <div className="thread-response-title">${session.title}</div>
+                  <div className="thread-response-summary">${session.summary}</div>
+                </div>
+                <div className="badge-row">
+                  <span className="badge">${label(meta, "department", session.department)}</span>
+                  <span className="badge">${label(meta, "output", session.output_style)}</span>
+                </div>
+              </div>
+              <div className="thread-muted-panel">该记录来自旧版历史摘要，暂未保存完整诊断面板与多智能体过程数据。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ConversationAssistantResult({ result, timestamp, meta }) {
+    const bodyHtml = markdownToHtml(result.professional_answer || "");
+    const rawModelText = result.raw_model_text || result.professional_answer || "";
+    const rawProviderRequest = result.raw_provider_request || "";
+    const rawProviderPayload = result.raw_provider_payload || "";
+    const showRawSection = Boolean(rawModelText || rawProviderRequest || rawProviderPayload);
+
+    return html`
+      <div className="thread-message thread-message-assistant">
+        <div className="thread-row">
+          <div className="thread-avatar thread-avatar-assistant">AI</div>
+          <div className="thread-bubble thread-bubble-assistant">
+            <div className="thread-message-meta">
+              <span>RareMDT Assistant</span>
+              <span>·</span>
+              <span>${formatTimestamp(timestamp)}</span>
+            </div>
+
+            <div className="thread-response-shell">
+              <div className="thread-response-head">
+                <div>
+                  <div className="thread-response-title">${result.title}</div>
+                  <div className="thread-response-summary">${result.executive_summary}</div>
+                </div>
+                <div className="badge-row">
+                  <span className="badge">${label(meta, "department", result.department)}</span>
+                  <span className="badge">${label(meta, "output", result.output_style)}</span>
+                  <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
+                </div>
+              </div>
+
+              <div className="thread-markdown-panel" dangerouslySetInnerHTML=${{ __html: bodyHtml }}></div>
+
+              ${showRawSection &&
+              html`
+                <details className="thread-details thread-raw-details">
+                  <summary>查看原始模型响应（用于核查）</summary>
+                  <div className="thread-details-body">
+                    ${rawProviderRequest &&
+                    html`
+                      <div className="thread-raw-label">请求 JSON</div>
+                      <pre className="thread-raw-response thread-raw-json">${rawProviderRequest}</pre>
+                    `}
+                    ${rawProviderPayload &&
+                    html`
+                      <div className="thread-raw-label">API 原始 JSON</div>
+                      <pre className="thread-raw-response thread-raw-json">${rawProviderPayload}</pre>
+                    `}
+                    <div className="thread-raw-label">模型文本</div>
+                    <pre className="thread-raw-response">${rawModelText || "模型未返回可用文本。"}</pre>
+                  </div>
+                </details>
+              `}
+
+              <div className="thread-support-grid">
+                <div className="thread-support-card">
+                  <div className="thread-support-title">下一步建议</div>
+                  <div className="thread-support-list">
+                    ${result.next_steps.map(
+                      (step, index) => html`
+                        <div key=${index} className="thread-support-item">
+                          <${Icon} name="spark" size=${15} />
+                          <span>${step}</span>
+                        </div>
+                      `
+                    )}
+                  </div>
+                </div>
+                <div className="thread-support-card">
+                  <div className="thread-support-title">安全提醒</div>
+                  <div className="thread-support-note">${result.safety_note}</div>
+                </div>
+              </div>
+
+              <details className="thread-details">
+                <summary>展开编码、费用与参考依据</summary>
+                <div className="thread-details-body">
+                  <${DataTableCard}
+                    title="编码建议"
+                    rows=${result.coding_table}
+                    columns=${[
+                      { key: "编码体系", label: "编码体系" },
+                      { key: "建议编码", label: "建议编码" },
+                      { key: "临床用途", label: "临床用途" },
+                    ]}
+                  />
+
+                  <${DataTableCard}
+                    title="费用评估"
+                    rows=${result.cost_table}
+                    columns=${[
+                      { key: "项目", label: "项目" },
+                      { key: "估算", label: "估算" },
+                    ]}
+                  />
+
+                  <${DataTableCard}
+                    title="参考依据"
+                    rows=${result.references}
+                    columns=${[
+                      { key: "type", label: "来源" },
+                      { key: "title", label: "标题" },
+                      { key: "region", label: "区域" },
+                    ]}
+                  />
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ConversationAssistantMessage({ message, meta }) {
+    const custom = message?.metadata?.custom || {};
+    const text = getThreadMessageText(message);
+
+    if (custom.kind === "execution-status") {
+      return html`<${ConversationExecutionStatus} custom=${custom} />`;
+    }
+
+    if (custom.kind === "legacy-summary") {
+      return html`<${ConversationLegacySummary} session=${custom.session} meta=${meta} />`;
+    }
+
+    if (custom.kind === "result" && custom.result) {
+      return html`<${ConversationAssistantResult} result=${custom.result} timestamp=${custom.timestamp} meta=${meta} />`;
+    }
+
+    if (!text) {
+      return html`<${ConversationThinkingMessage} />`;
+    }
+
+    return html`
+      <div className="thread-message thread-message-assistant">
+        <div className="thread-row">
+          <div className="thread-avatar thread-avatar-assistant">AI</div>
+          <div className="thread-bubble thread-bubble-assistant">
+            <div className="thread-message-meta">
+              <span>RareMDT Assistant</span>
+            </div>
+            <div className="thread-markdown-panel" dangerouslySetInnerHTML=${{ __html: markdownToHtml(text) }}></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ConversationThread({ session = null, pendingSubmission = null, meta }) {
+    const threadState = useMemo(
+      () => buildConversationState(session, pendingSubmission),
+      [session, pendingSubmission]
+    );
+
+    const runtime = useExternalStoreRuntime({
+      messages: threadState.messages,
+      isRunning: threadState.isRunning,
+      setMessages: () => {},
+      convertMessage: (message) => message,
+      onNew: async () => {},
+    });
+
+    return html`
+      <${AssistantRuntimeProvider} runtime=${runtime}>
+        <${ThreadPrimitive.Root} className="assistant-thread">
+          <div className="assistant-thread-frame">
+            <${ConversationThreadHeader} />
+            <${ThreadPrimitive.Viewport} className="assistant-thread-viewport">
+              <div className="assistant-thread-inner">
+                ${threadState.messages.length === 0 && html`<div className="thread-empty-spacer"></div>`}
+                <${ThreadPrimitive.Messages}
+                  children=${({ message }) =>
+                    message?.role === "user"
+                      ? html`<${ConversationUserMessage} message=${message} />`
+                      : html`<${ConversationAssistantMessage} message=${message} meta=${meta} />`}
+                />
+              </div>
+            </${ThreadPrimitive.Viewport}>
+          </div>
+        </${ThreadPrimitive.Root}>
+      </${AssistantRuntimeProvider}>
+    `;
+  }
+
+  function PendingWorkspace({ submission, execution, meta }) {
+    if (!submission) {
+      return null;
+    }
+
+    return html`<${ConversationThread} pendingSubmission=${{ ...submission, execution }} meta=${meta} />`;
   }
 
   function EmptyWorkspaceWordmark() {
@@ -914,97 +1287,7 @@
       return null;
     }
 
-    if (!session.result || !session.submission) {
-      return html`<${SessionSummaryOnly} session=${session} meta=${meta} />`;
-    }
-
-    const result = session.result;
-    const submission = session.submission;
-
-    return html`
-      <div className="workspace-feed">
-        <div className="message-card message-user">
-          <div className="message-meta">
-            <span>病例输入</span>
-            <span>·</span>
-            <span>${formatTimestamp(session.timestamp)}</span>
-          </div>
-          <div className="message-body">${submission.case_summary}</div>
-        </div>
-
-        <${ExecutionStatusCard}
-          executionMode=${result.execution_mode}
-          providerName=${result.serving_provider}
-          modelName=${result.serving_model}
-        />
-
-        <div className="result-card">
-          <div className="result-head">
-            <div>
-              <div className="result-title">${result.title}</div>
-              <div className="result-summary">${result.executive_summary}</div>
-            </div>
-            <div className="badge-row">
-              <span className="badge">${label(meta, "department", result.department)}</span>
-              <span className="badge">${label(meta, "output", result.output_style)}</span>
-              <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
-            </div>
-          </div>
-
-          <div className="result-section-grid">
-            <div className="markdown-panel" dangerouslySetInnerHTML=${{ __html: markdownToHtml(result.professional_answer) }}></div>
-            <div className="info-panel">
-              <div className="panel-title">下一步建议</div>
-              <div className="info-list">
-                ${result.next_steps.map(
-                  (step, index) => html`
-                    <div key=${index} className="info-list-item">
-                      <${Icon} name="spark" size=${16} />
-                      <span>${step}</span>
-                    </div>
-                  `
-                )}
-              </div>
-
-              <div className="panel-title" style=${{ marginTop: "18px" }}>安全提醒</div>
-              <div className="info-list-item">
-                <${Icon} name="history" size=${16} />
-                <span>${result.safety_note}</span>
-              </div>
-            </div>
-          </div>
-
-          <${DataTableCard}
-            title="编码建议"
-            rows=${result.coding_table}
-            columns=${[
-              { key: "编码体系", label: "编码体系" },
-              { key: "建议编码", label: "建议编码" },
-              { key: "临床用途", label: "临床用途" },
-            ]}
-          />
-
-          <${DataTableCard}
-            title="费用评估"
-            rows=${result.cost_table}
-            columns=${[
-              { key: "项目", label: "项目" },
-              { key: "估算", label: "估算" },
-            ]}
-          />
-
-          <${DataTableCard}
-            title="参考依据"
-            rows=${result.references}
-            columns=${[
-              { key: "type", label: "来源" },
-              { key: "title", label: "标题" },
-              { key: "region", label: "区域" },
-            ]}
-          />
-        </div>
-      </div>
-    `;
+    return html`<${ConversationThread} session=${session} meta=${meta} />`;
   }
 
   function DataTableCard({ title, columns, rows }) {
@@ -2554,6 +2837,12 @@
         pushNotice("请先输入病例摘要。", "error");
         return;
       }
+      const submittedComposer = {
+        ...composer,
+        case_blocks: [...(composer.case_blocks || [])],
+        image_files: [...(composer.image_files || [])],
+        doc_files: [...(composer.doc_files || [])],
+      };
       setIsSubmitting(true);
       try {
         const execution = composer.single_model_test
@@ -2579,6 +2868,11 @@
           case_summary: composer.case_summary,
           execution,
         });
+        setComposer((current) => ({
+          ...makeDefaultComposer(meta, settings),
+          input_expanded: current.input_expanded,
+          single_model_test: current.single_model_test,
+        }));
         setActiveView("workspace");
         const data = await fetchJson("/api/diagnose", {
           method: "POST",
@@ -2587,15 +2881,15 @@
         setCurrentSession(data.session);
         setPendingSubmission(null);
         applySessionList(data.sessions || []);
-        setComposer((current) => ({
-          ...makeDefaultComposer(meta, settings),
-          input_expanded: current.input_expanded,
-          single_model_test: current.single_model_test,
-        }));
         setActiveView("workspace");
         pushNotice("会诊已生成。");
       } catch (error) {
         setPendingSubmission(null);
+        setComposer((current) => ({
+          ...submittedComposer,
+          input_expanded: current.input_expanded,
+          single_model_test: current.single_model_test,
+        }));
         if (!handleAuthError(error)) {
           pushNotice(error.message, "error");
         }
@@ -2900,7 +3194,7 @@
                       />
                     `
                   : pendingSubmission
-                    ? html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />`
+                    ? html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} meta=${meta} />`
                     : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
               </div>
 
@@ -2929,5 +3223,4 @@
     `;
   }
 
-  ReactDOM.createRoot(document.getElementById("app")).render(html`<${App} />`);
-})();
+createRoot(document.getElementById("app")).render(html`<${App} />`);

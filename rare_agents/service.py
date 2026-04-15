@@ -530,6 +530,7 @@ def _run_single_model_provider_case(
         "messages": _build_single_model_messages(submission, profile, role),
         "temperature": 0.2,
     }
+    raw_provider_request = json.dumps(body, ensure_ascii=False, indent=2)
     try:
         payload = _request_provider_json(url, provider.api_key, body)
     except urllib_error.HTTPError as exc:
@@ -543,6 +544,7 @@ def _run_single_model_provider_case(
         raise ValueError(f"单模型测试失败：无法连接接口，{_trim_message(str(reason))}") from exc
 
     generated_answer = _extract_chat_content(payload)
+    raw_provider_payload = json.dumps(payload, ensure_ascii=False, indent=2)
     return run_single_model_case(
         submission=submission,
         profile=profile,
@@ -552,6 +554,8 @@ def _run_single_model_provider_case(
         role_name=role.role_name,
         role_spec=role.role_spec,
         generated_answer=generated_answer,
+        raw_provider_request=raw_provider_request,
+        raw_provider_payload=raw_provider_payload,
     )
 
 
