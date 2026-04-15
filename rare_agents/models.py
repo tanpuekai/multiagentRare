@@ -77,6 +77,7 @@ class CaseSubmission:
     uploaded_images: list[str]
     uploaded_docs: list[str]
     show_process: bool
+    image_assets: list[dict[str, str]] = field(default_factory=list)
     single_model_test: bool = False
     is_ready: bool = True
 
@@ -93,6 +94,7 @@ class CaseSubmission:
             insurance_type="",
             uploaded_images=[],
             uploaded_docs=[],
+            image_assets=[],
             show_process=False,
             single_model_test=False,
             is_ready=False,
@@ -119,6 +121,10 @@ class EngineResult:
     execution_mode: str = "multi_agent"
     serving_provider: str = ""
     serving_model: str = ""
+    activated_agent: str = ""
+    plan_steps: list[dict[str, object]] = field(default_factory=list)
+    plan_display_steps: list[dict[str, object]] = field(default_factory=list)
+    execution_records: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -143,6 +149,14 @@ class QueryHistoryItem:
 
 
 @dataclass
+class SessionTurn:
+    timestamp: str
+    user_input: str
+    submission: CaseSubmission
+    result: EngineResult
+
+
+@dataclass
 class CaseSessionRecord:
     session_id: str
     timestamp: str
@@ -154,10 +168,25 @@ class CaseSessionRecord:
     show_in_sidebar: bool = True
     submission: CaseSubmission | None = None
     result: EngineResult | None = None
+    context_submission: CaseSubmission | None = None
+    turns: list[SessionTurn] = field(default_factory=list)
 
     @classmethod
-    def from_result(cls, session_id: str, submission: CaseSubmission, result: EngineResult) -> "CaseSessionRecord":
+    def from_result(
+        cls,
+        session_id: str,
+        submission: CaseSubmission,
+        result: EngineResult,
+        *,
+        user_input: str | None = None,
+    ) -> "CaseSessionRecord":
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        turn = SessionTurn(
+            timestamp=timestamp,
+            user_input=(user_input or submission.case_summary).strip(),
+            submission=submission,
+            result=result,
+        )
         return cls(
             session_id=session_id,
             timestamp=timestamp,
@@ -169,6 +198,8 @@ class CaseSessionRecord:
             show_in_sidebar=True,
             submission=submission,
             result=result,
+            context_submission=submission,
+            turns=[turn],
         )
 
     @classmethod
@@ -228,6 +259,12 @@ def default_settings() -> SystemSettings:
                 provider_name="GLM / BigModel",
                 agent_count=1,
                 role_spec="规划鉴别诊断或治疗路径，明确下一步证据需求，并优先排序罕见病分支。",
+            ),
+            AgentRoleConfig(
+                role_name="Executor",
+                provider_name="GLM / BigModel",
+                agent_count=1,
+                role_spec="负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
             ),
             AgentRoleConfig(
                 role_name="Generator",
