@@ -622,11 +622,41 @@
       return { role: null, provider: null, providerIndex: -1 };
     }
     const providers = settings?.api_providers || [];
-    const providerIndex = providers.findIndex((item) => item.provider_name === firstRole.provider_name);
+    const providerIndex = providers.findIndex((item) =>
+      firstRole.provider_id ? item.provider_id === firstRole.provider_id : item.provider_name === firstRole.provider_name
+    );
     return {
       role: firstRole,
       provider: providerIndex >= 0 ? providers[providerIndex] : null,
       providerIndex,
+    };
+  }
+
+  function resolveRoleProvider(settings, roleName) {
+    const role = (settings?.agent_roles || []).find((item) => item.role_name === roleName) || null;
+    if (!role) {
+      return { role: null, provider: null, providerIndex: -1 };
+    }
+    const providers = settings?.api_providers || [];
+    const providerIndex = providers.findIndex((item) =>
+      role.provider_id ? item.provider_id === role.provider_id : item.provider_name === role.provider_name
+    );
+    return {
+      role,
+      provider: providerIndex >= 0 ? providers[providerIndex] : null,
+      providerIndex,
+    };
+  }
+
+  function resolveRoleExecution(settings, roleName) {
+    const { role, provider } = resolveRoleProvider(settings, roleName);
+    if (!role) {
+      return { roleName, providerName: "未配置", modelName: "未配置模型" };
+    }
+    return {
+      roleName: role.role_name || roleName,
+      providerName: providerOptionLabel(provider) || role.provider_name || "未配置",
+      modelName: provider?.model_name || "未配置模型",
     };
   }
 
@@ -637,7 +667,7 @@
     }
     return {
       roleName: firstRole.role_name || "",
-      providerName: provider?.provider_name || firstRole.provider_name || "未配置",
+      providerName: providerOptionLabel(provider) || firstRole.provider_name || "未配置",
       modelName: provider?.model_name || "未配置模型",
     };
   }
@@ -692,6 +722,38 @@
 
   function cloneData(value) {
     return JSON.parse(JSON.stringify(value));
+  }
+
+  function makeProviderId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return `provider-${window.crypto.randomUUID().slice(0, 12)}`;
+    }
+    return `provider-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function providerValue(provider) {
+    return provider?.provider_id || provider?.provider_name || "";
+  }
+
+  function providerOptionLabel(provider) {
+    if (!provider) {
+      return "未配置接口";
+    }
+    let host = "";
+    try {
+      const rawEndpoint = String(provider.endpoint || "").trim();
+      if (rawEndpoint) {
+        host = new URL(rawEndpoint.startsWith("http") ? rawEndpoint : `https://${rawEndpoint}`).host.replace(/^www\./, "");
+      }
+    } catch (error) {}
+    const parts = [provider.provider_name || "未命名接口"];
+    if (provider.model_name) {
+      parts.push(provider.model_name);
+    }
+    if (host) {
+      parts.push(host);
+    }
+    return parts.join(" · ");
   }
 
   function cx(...parts) {
@@ -2638,7 +2700,7 @@
     `;
   }
 
-  function SettingsEditor({ meta, draft, setDraft, onTestProvider, testingProviderIndex }) {
+  function SettingsEditor({ meta, draft, setDraft, onTestProvider, testingProviderIndex, onTestRoleProvider, testingRoleName }) {
     const [configSection, setConfigSection] = useState("system");
 
     function updateRoot(key, value) {
@@ -2652,6 +2714,11 @@
         if (key === "provider_name") {
           const oldEndpoint = provider.endpoint;
           provider.provider_name = value;
+          next.agent_roles = (next.agent_roles || []).map((role) =>
+            role.provider_id && role.provider_id === provider.provider_id
+              ? { ...role, provider_name: value }
+              : role
+          );
           if (!oldEndpoint || Object.values(meta.provider_presets).includes(oldEndpoint)) {
             provider.endpoint = meta.provider_presets[value] || oldEndpoint;
           }
@@ -2665,7 +2732,14 @@
     function updateRole(index, key, value) {
       setDraft((current) => {
         const next = cloneData(current);
-        next.agent_roles[index][key] = key === "agent_count" ? Number(value) : value;
+        const role = next.agent_roles[index];
+        if (key === "provider_id") {
+          const provider = (next.api_providers || []).find((item) => providerValue(item) === value) || null;
+          role.provider_id = provider?.provider_id || "";
+          role.provider_name = provider?.provider_name || role.provider_name || "DeepSeek";
+          return next;
+        }
+        role[key] = key === "agent_count" ? Number(value) : value;
         return next;
       });
     }
@@ -2676,6 +2750,7 @@
         api_providers: [
           ...current.api_providers,
           {
+            provider_id: makeProviderId(),
             provider_name: "OpenAI Compatible",
             model_name: "",
             endpoint: meta.provider_presets["OpenAI Compatible"] || "",
@@ -2695,6 +2770,23 @@
           {
             role_name: "Planner",
             role_spec: "",
+            provider_id: current.api_providers[0]?.provider_id || "",
+            provider_name: current.api_providers[0]?.provider_name || "DeepSeek",
+            agent_count: 1,
+          },
+        ],
+      }));
+    }
+
+    function addSpecificRole(roleName) {
+      setDraft((current) => ({
+        ...current,
+        agent_roles: [
+          ...current.agent_roles,
+          {
+            role_name: roleName,
+            role_spec: "",
+            provider_id: current.api_providers[0]?.provider_id || "",
             provider_name: current.api_providers[0]?.provider_name || "DeepSeek",
             agent_count: 1,
           },
@@ -2705,7 +2797,18 @@
     function removeProvider(index) {
       setDraft((current) => {
         const next = cloneData(current);
-        next.api_providers.splice(index, 1);
+        const [removed] = next.api_providers.splice(index, 1);
+        const fallbackProvider = next.api_providers[0] || null;
+        next.agent_roles = (next.agent_roles || []).map((role) => {
+          if (!removed || role.provider_id !== removed.provider_id) {
+            return role;
+          }
+          return {
+            ...role,
+            provider_id: fallbackProvider?.provider_id || "",
+            provider_name: fallbackProvider?.provider_name || role.provider_name,
+          };
+        });
         return next;
       });
     }
@@ -2718,11 +2821,25 @@
       });
     }
 
+    const plannerExecutorRoles = ["Planner", "Executor"].map((roleName) => {
+      const roleIndex = (draft.agent_roles || []).findIndex((item) => item.role_name === roleName);
+      const role = roleIndex >= 0 ? draft.agent_roles[roleIndex] : null;
+      const provider = role
+        ? (draft.api_providers || []).find((item) =>
+            role.provider_id ? item.provider_id === role.provider_id : item.provider_name === role.provider_name
+          ) || null
+        : null;
+      return { roleName, roleIndex, role, provider };
+    });
+
     return html`
       <div className="settings-content">
         <div className="settings-nav">
           <button className=${cx("chip", configSection === "system" && "is-active")} onClick=${() => setConfigSection("system")}>
             总体策略
+          </button>
+          <button className=${cx("chip", configSection === "plannerExecutor" && "is-active")} onClick=${() => setConfigSection("plannerExecutor")}>
+            Planner / Executor
           </button>
           <button className=${cx("chip", configSection === "roles" && "is-active")} onClick=${() => setConfigSection("roles")}>
             Agent Roles
@@ -2762,6 +2879,76 @@
           </div>
         `}
 
+        ${configSection === "plannerExecutor" &&
+        html`
+          <div className="card-list">
+            <div className="config-card">
+              <div className="config-card-title">视觉接口要求</div>
+              <div className="sidebar-item-meta" style=${{ marginTop: "8px", lineHeight: 1.7 }}>
+                Planner 与 Executor 不走任何代理或回退逻辑，都会直接调用这里绑定的真实图像接口。
+                请为它们选择支持 <code>image_url</code> 输入的多模态模型，并逐个点击“测试视觉接口”验证。
+              </div>
+            </div>
+
+            ${plannerExecutorRoles.map(({ roleName, roleIndex, role, provider }) =>
+              role
+                ? html`
+                    <div key=${roleName} className="config-card">
+                      <div className="config-card-head">
+                        <div className="config-card-title">${roleName}</div>
+                        <button
+                          className="secondary-button"
+                          onClick=${() => onTestRoleProvider(roleName)}
+                          disabled=${testingRoleName === roleName}
+                        >
+                          <${Icon} name=${testingRoleName === roleName ? "reset" : "pulse"} size=${16} className=${testingRoleName === roleName ? "spin-icon" : ""} />
+                          测试视觉接口
+                        </button>
+                      </div>
+                      <div className="form-grid wide">
+                        <label className="field">
+                          <span className="field-label">Provider</span>
+                          <select value=${role.provider_id || role.provider_name} onChange=${(event) => updateRole(roleIndex, "provider_id", event.target.value)}>
+                            ${draft.api_providers.map((item, providerIndex) => html`
+                              <option key=${item.provider_id || `${item.provider_name}-${providerIndex}`} value=${providerValue(item)}>
+                                ${providerOptionLabel(item)}
+                              </option>
+                            `)}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span className="field-label">Model</span>
+                          <input value=${provider?.model_name || ""} readOnly=${true} />
+                        </label>
+                        <label className="field">
+                          <span className="field-label">Endpoint</span>
+                          <input value=${provider?.endpoint || ""} readOnly=${true} />
+                        </label>
+                      </div>
+                      <label className="stack-field" style=${{ marginTop: "14px" }}>
+                        <span className="field-label">角色说明</span>
+                        <textarea value=${role.role_spec || ""} onChange=${(event) => updateRole(roleIndex, "role_spec", event.target.value)}></textarea>
+                      </label>
+                    </div>
+                  `
+                : html`
+                    <div key=${roleName} className="config-card">
+                      <div className="config-card-head">
+                        <div className="config-card-title">${roleName}</div>
+                        <button className="secondary-button" onClick=${() => addSpecificRole(roleName)}>
+                          <${Icon} name="plus" size=${16} />
+                          添加 ${roleName}
+                        </button>
+                      </div>
+                      <div className="sidebar-item-meta" style=${{ marginTop: "8px" }}>
+                        当前尚未配置 ${roleName} 角色。添加后即可在这里绑定真实视觉接口。
+                      </div>
+                    </div>
+                  `
+            )}
+          </div>
+        `}
+
         ${configSection === "roles" &&
         html`
           <div style=${{ display: "flex", justifyContent: "flex-end" }}>
@@ -2787,8 +2974,12 @@
                     </label>
                     <label className="field">
                       <span className="field-label">Provider</span>
-                      <select value=${role.provider_name} onChange=${(event) => updateRole(index, "provider_name", event.target.value)}>
-                        ${draft.api_providers.map((provider) => html`<option key=${provider.provider_name} value=${provider.provider_name}>${provider.provider_name}</option>`)}
+                      <select value=${role.provider_id || role.provider_name} onChange=${(event) => updateRole(index, "provider_id", event.target.value)}>
+                        ${draft.api_providers.map((provider, providerIndex) => html`
+                          <option key=${provider.provider_id || `${provider.provider_name}-${providerIndex}`} value=${providerValue(provider)}>
+                            ${providerOptionLabel(provider)}
+                          </option>
+                        `)}
                       </select>
                     </label>
                     <label className="field">
@@ -2817,9 +3008,9 @@
           <div className="card-list">
             ${draft.api_providers.map(
               (provider, index) => html`
-                <div key=${index} className="config-card">
+                <div key=${provider.provider_id || index} className="config-card">
                   <div className="config-card-head">
-                    <div className="config-card-title">${provider.provider_name || `Provider ${index + 1}`}</div>
+                    <div className="config-card-title">${providerOptionLabel(provider) || `Provider ${index + 1}`}</div>
                     <div className="config-card-actions">
                       <button
                         className="subtle-icon-button"
@@ -2886,6 +3077,8 @@
     isSaving,
     onTestProvider,
     testingProviderIndex,
+    onTestRoleProvider,
+    testingRoleName,
     onToggleSidebarSession,
     onSetAllSidebarSessions,
     visibilityBusyKey,
@@ -2932,6 +3125,8 @@
             setDraft=${setSettingsDraft}
             onTestProvider=${onTestProvider}
             testingProviderIndex=${testingProviderIndex}
+            onTestRoleProvider=${onTestRoleProvider}
+            testingRoleName=${testingRoleName}
           />
           <div style=${{ display: "flex", justifyContent: "flex-end", marginTop: "18px" }}>
             <button className="primary-button" onClick=${onSaveSettings} disabled=${isSaving}>保存设置</button>
@@ -2992,6 +3187,7 @@
     const [isLoggingIn, setIsLoggingIn] = useState(false);
     const [isAccountMutating, setIsAccountMutating] = useState(false);
     const [testingProviderIndex, setTestingProviderIndex] = useState(null);
+    const [testingRoleName, setTestingRoleName] = useState("");
     const [visibilityBusyKey, setVisibilityBusyKey] = useState(null);
     const [historyPreviewSession, setHistoryPreviewSession] = useState(null);
     const [isHistoryPreviewLoading, setIsHistoryPreviewLoading] = useState(false);
@@ -3019,6 +3215,8 @@
       setProfileDraft(null);
       setSettingsDraft(null);
       setAdminAccounts([]);
+      setTestingProviderIndex(null);
+      setTestingRoleName("");
       setActiveView("workspace");
       setSettingsSection("医生档案");
       setSettingsMenuOpen(false);
@@ -3212,9 +3410,9 @@
         const executorRequested = isExecutorInvocation(composer.case_summary);
         const imageAssets = plannerRequested || executorRequested ? await serializeImageAssets(composer.image_files) : [];
         const execution = executorRequested
-          ? { mode: "executor", providerName: "configured", modelName: "configured", roleName: "Executor" }
+          ? { mode: "executor", ...resolveRoleExecution(settings, "Executor") }
           : plannerRequested
-            ? { mode: "planner", providerName: "configured", modelName: "configured", roleName: "Planner" }
+            ? { mode: "planner", ...resolveRoleExecution(settings, "Planner") }
           : composer.single_model_test
             ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
             : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
@@ -3341,10 +3539,10 @@
           method: "POST",
           body: JSON.stringify({ provider }),
         });
-        pushNotice(data.message || `单模型默认接口 ${provider.provider_name || "未命名接口"} 测试通过。`);
+        pushNotice(data.message || `单模型默认接口 ${providerOptionLabel(provider)} 测试通过。`);
       } catch (error) {
         if (!handleAuthError(error)) {
-          pushNotice(`单模型默认接口 ${provider.provider_name || "未命名接口"} 测试失败：${error.message}`, "error");
+          pushNotice(`单模型默认接口 ${providerOptionLabel(provider)} 测试失败：${error.message}`, "error");
         }
       }
     }
@@ -3361,13 +3559,39 @@
           method: "POST",
           body: JSON.stringify({ provider }),
         });
-        pushNotice(data.message || `${provider.provider_name} 接口可用。`);
+        pushNotice(data.message || `${providerOptionLabel(provider)} 接口可用。`);
       } catch (error) {
         if (!handleAuthError(error)) {
           pushNotice(error.message, "error");
         }
       } finally {
         setTestingProviderIndex(null);
+      }
+    }
+
+    async function testRoleProvider(roleName) {
+      const { role, provider } = resolveRoleProvider(settingsDraft, roleName);
+      if (!role) {
+        pushNotice(`${roleName} 尚未配置，请先在设置页添加该角色。`, "error");
+        return;
+      }
+      if (!provider) {
+        pushNotice(`${roleName} 当前绑定的 Provider 不存在或未启用。`, "error");
+        return;
+      }
+      setTestingRoleName(roleName);
+      try {
+        const data = await fetchJson("/api/providers/test", {
+          method: "POST",
+          body: JSON.stringify({ provider, mode: "vision" }),
+        });
+        pushNotice(data.message || `${roleName} 视觉接口测试通过。`);
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(`${roleName} 视觉接口测试失败：${error.message}`, "error");
+        }
+      } finally {
+        setTestingRoleName("");
       }
     }
 
@@ -3539,11 +3763,11 @@
               <div className="main-scroll">
                 ${activeView === "settings"
                   ? html`
-                      <${SettingsWorkspace}
-                        meta=${meta}
-                        section=${settingsSection}
-                        profileDraft=${profileDraft}
-                        setProfileDraft=${setProfileDraft}
+          <${SettingsWorkspace}
+            meta=${meta}
+            section=${settingsSection}
+            profileDraft=${profileDraft}
+            setProfileDraft=${setProfileDraft}
                         settingsDraft=${settingsDraft}
                         setSettingsDraft=${setSettingsDraft}
                         sessions=${sessions}
@@ -3552,13 +3776,15 @@
                         onSaveProfile=${saveProfileDraft}
                         onSaveSettings=${saveSettingsDraft}
                         onSwitchSection=${switchSettingsSection}
-                        isSaving=${isSaving}
-                        onTestProvider=${testProvider}
-                        testingProviderIndex=${testingProviderIndex}
-                        onToggleSidebarSession=${setSessionSidebarVisibility}
-                        onSetAllSidebarSessions=${setAllSidebarSessions}
-                        visibilityBusyKey=${visibilityBusyKey}
-                        historyPreviewSession=${historyPreviewSession}
+            isSaving=${isSaving}
+            onTestProvider=${testProvider}
+            testingProviderIndex=${testingProviderIndex}
+            onTestRoleProvider=${testRoleProvider}
+            testingRoleName=${testingRoleName}
+            onToggleSidebarSession=${setSessionSidebarVisibility}
+            onSetAllSidebarSessions=${setAllSidebarSessions}
+            visibilityBusyKey=${visibilityBusyKey}
+            historyPreviewSession=${historyPreviewSession}
                         isHistoryPreviewLoading=${isHistoryPreviewLoading}
                         onCloseHistoryPreview=${closeHistoryPreview}
                         adminAccounts=${adminAccounts}

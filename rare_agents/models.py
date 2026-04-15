@@ -23,6 +23,7 @@ class OrchestrationMode(str, Enum):
 
 @dataclass
 class APIProviderConfig:
+    provider_id: str = ""
     provider_name: str = "DeepSeek"
     model_name: str = "deepseek-chat"
     endpoint: str = ""
@@ -37,6 +38,7 @@ class AgentRoleConfig:
     role_spec: str = (
         "负责协调各专科智能体、推动结论收敛、消除冲突，并生成适合临床阅读的最终结论。"
     )
+    provider_id: str = ""
     provider_name: str = "DeepSeek"
     agent_count: int = 1
 
@@ -233,18 +235,21 @@ def default_settings() -> SystemSettings:
         show_diagnostics=True,
         api_providers=[
             APIProviderConfig(
+                provider_id="provider-deepseek-default",
                 provider_name="DeepSeek",
                 model_name="deepseek-chat",
                 endpoint="https://api.deepseek.com",
                 agents_for_api=2,
             ),
             APIProviderConfig(
+                provider_id="provider-glm-default",
                 provider_name="GLM / BigModel",
                 model_name="glm-4.5",
                 endpoint="https://open.bigmodel.cn/api/paas/v4",
                 agents_for_api=1,
             ),
             APIProviderConfig(
+                provider_id="provider-kimi-default",
                 provider_name="Kimi",
                 model_name="moonshot-v1-128k",
                 endpoint="https://api.moonshot.cn/v1",
@@ -254,42 +259,49 @@ def default_settings() -> SystemSettings:
         agent_roles=[
             AgentRoleConfig(
                 role_name="Orchestrator",
+                provider_id="provider-deepseek-default",
                 provider_name="DeepSeek",
                 agent_count=1,
                 role_spec="负责结构化拆解病例、统筹轮次级综合分析，并在智能体之间解决冲突。",
             ),
             AgentRoleConfig(
                 role_name="Planner",
+                provider_id="provider-glm-default",
                 provider_name="GLM / BigModel",
                 agent_count=1,
                 role_spec="规划鉴别诊断或治疗路径，明确下一步证据需求，并优先排序罕见病分支。",
             ),
             AgentRoleConfig(
                 role_name="Executor",
+                provider_id="provider-glm-default",
                 provider_name="GLM / BigModel",
                 agent_count=1,
                 role_spec="负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
             ),
             AgentRoleConfig(
                 role_name="Generator",
+                provider_id="provider-kimi-default",
                 provider_name="Kimi",
                 agent_count=2,
                 role_spec="起草面向临床医生的结构化回答，要求表达专业、分区清晰，并体现专科细节。",
             ),
             AgentRoleConfig(
                 role_name="Fact Checker",
+                provider_id="provider-deepseek-default",
                 provider_name="DeepSeek",
                 agent_count=1,
                 role_spec="核查前后不一致、证据不足、不安全建议，以及编码或费用披露缺失等问题。",
             ),
             AgentRoleConfig(
                 role_name="Guideline Retriever",
+                provider_id="provider-glm-default",
                 provider_name="GLM / BigModel",
                 agent_count=1,
                 role_spec="为结论补充中国与国际罕见病、专科及围手术期指南或共识依据。",
             ),
             AgentRoleConfig(
                 role_name="Web Search",
+                provider_id="provider-kimi-default",
                 provider_name="Kimi",
                 agent_count=1,
                 role_spec="用于正式部署时检索最新共识、院内路径与医保支付规则。",

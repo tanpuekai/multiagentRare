@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from base64 import b64encode
 from dataclasses import asdict
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
+
+from PIL import Image, ImageDraw
 
 from rare_agents.auth import (
     create_account as create_auth_account,
@@ -46,6 +50,25 @@ LEGACY_PROFILE_PATH = DATA_DIR / "profile.json"
 LEGACY_SETTINGS_PATH = DATA_DIR / "settings.json"
 LEGACY_HISTORY_PATH = DATA_DIR / "history.json"
 LEGACY_SESSIONS_PATH = DATA_DIR / "sessions.json"
+VISION_TEST_IMAGE_DATA_URL = (
+    "data:image/png;base64,"
+    "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"
+)
+
+
+def _build_vision_test_image_data_url() -> str:
+    image = Image.new("RGB", (256, 256), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((28, 24, 228, 232), outline=(60, 60, 60), width=4)
+    draw.ellipse((92, 84, 164, 156), outline=(30, 30, 30), width=4, fill=(215, 215, 215))
+    draw.line((60, 182, 196, 182), fill=(40, 40, 40), width=5)
+    draw.text((72, 34), "CXR TEST", fill=(20, 20, 20))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + b64encode(buffer.getvalue()).decode("ascii")
+
+
+VISION_TEST_IMAGE_DATA_URL = _build_vision_test_image_data_url()
 
 SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录", "账户管理"]
 DEPARTMENTS = [item.value for item in DepartmentOption]
@@ -162,6 +185,7 @@ def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
         AgentRoleConfig(
             role_name=role.role_name,
             role_spec=ROLE_SPEC_MIGRATIONS.get(role.role_spec, role.role_spec),
+            provider_id=getattr(role, "provider_id", ""),
             provider_name=role.provider_name,
             agent_count=role.agent_count,
         )
@@ -173,11 +197,67 @@ def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
             AgentRoleConfig(
                 role_name="Executor",
                 role_spec="负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
+                provider_id=planner_role.provider_id if planner_role else "",
                 provider_name=planner_role.provider_name if planner_role else "DeepSeek",
                 agent_count=1,
             )
         )
     return migrated
+
+
+def _provider_key(provider_name: str, endpoint: str, model_name: str, index: int) -> str:
+    seed = "|".join(
+        [
+            str(provider_name or "").strip(),
+            str(endpoint or "").strip(),
+            str(model_name or "").strip(),
+            str(index),
+        ]
+    )
+    return f"provider-{uuid5(NAMESPACE_URL, seed).hex[:12]}"
+
+
+def _provider_matches_role(provider: APIProviderConfig, role: AgentRoleConfig) -> bool:
+    role_provider_id = str(getattr(role, "provider_id", "") or "").strip()
+    provider_id = str(getattr(provider, "provider_id", "") or "").strip()
+    if role_provider_id and provider_id:
+        return role_provider_id == provider_id
+    return provider.provider_name == role.provider_name
+
+
+def _materialize_provider_bindings(
+    providers: list[APIProviderConfig],
+    roles: list[AgentRoleConfig],
+) -> tuple[list[APIProviderConfig], list[AgentRoleConfig], bool]:
+    changed = False
+    seen_ids: set[str] = set()
+    normalized_providers: list[APIProviderConfig] = []
+    for index, provider in enumerate(providers, start=1):
+        provider_id = str(getattr(provider, "provider_id", "") or "").strip()
+        if not provider_id:
+            provider_id = _provider_key(provider.provider_name, provider.endpoint, provider.model_name, index)
+        if provider_id in seen_ids:
+            provider_id = f"{provider_id}-{index}"
+        if provider.provider_id != provider_id:
+            provider.provider_id = provider_id
+            changed = True
+        normalized_providers.append(provider)
+        seen_ids.add(provider_id)
+
+    normalized_roles: list[AgentRoleConfig] = []
+    for role in roles:
+        matched = next((provider for provider in normalized_providers if _provider_matches_role(provider, role)), None)
+        if matched is None and role.provider_name:
+            matched = next((provider for provider in normalized_providers if provider.provider_name == role.provider_name), None)
+        if matched is not None:
+            if role.provider_id != matched.provider_id:
+                role.provider_id = matched.provider_id
+                changed = True
+            if role.provider_name != matched.provider_name:
+                role.provider_name = matched.provider_name
+                changed = True
+        normalized_roles.append(role)
+    return normalized_providers, normalized_roles, changed
 
 
 def _user_paths(username: str) -> dict[str, Path]:
@@ -231,15 +311,19 @@ def load_settings(username: str) -> SystemSettings:
     data = load_json(_user_paths(username)["settings"], asdict(default_settings()))
     providers = [APIProviderConfig(**provider) for provider in data.get("api_providers", [])]
     roles = [AgentRoleConfig(**role) for role in data.get("agent_roles", [])]
-    return SystemSettings(
+    providers, roles, changed = _materialize_provider_bindings(providers, migrate_roles(roles))
+    settings = SystemSettings(
         orchestration_mode=data.get("orchestration_mode", OrchestrationMode.ASYMMETRIC.value),
         default_department=data.get("default_department", DepartmentOption.PEDIATRICS.value),
         consensus_threshold=float(data.get("consensus_threshold", 0.82)),
         max_rounds=int(data.get("max_rounds", 3)),
         show_diagnostics=bool(data.get("show_diagnostics", True)),
         api_providers=providers,
-        agent_roles=migrate_roles(roles),
+        agent_roles=roles,
     )
+    if changed:
+        save_settings(username, settings)
+    return settings
 
 
 def load_history(username: str) -> list[QueryHistoryItem]:
@@ -468,6 +552,7 @@ def settings_from_payload(username: str, payload: dict[str, Any]) -> SystemSetti
     current = load_settings(username)
     providers = [
         APIProviderConfig(
+            provider_id=str(item.get("provider_id", getattr(current.api_providers[index], "provider_id", "") if index < len(current.api_providers) else "")).strip(),
             provider_name=str(item.get("provider_name", "DeepSeek")),
             model_name=str(item.get("model_name", "deepseek-chat")),
             endpoint=str(item.get("endpoint", "")),
@@ -475,17 +560,19 @@ def settings_from_payload(username: str, payload: dict[str, Any]) -> SystemSetti
             agents_for_api=max(int(item.get("agents_for_api", 1)), 1),
             enabled=bool(item.get("enabled", True)),
         )
-        for item in payload.get("api_providers", [asdict(provider) for provider in current.api_providers])
+        for index, item in enumerate(payload.get("api_providers", [asdict(provider) for provider in current.api_providers]))
     ]
     roles = [
         AgentRoleConfig(
             role_name=str(item.get("role_name", "Orchestrator")),
             role_spec=str(item.get("role_spec", "")),
+            provider_id=str(item.get("provider_id", getattr(current.agent_roles[index], "provider_id", "") if index < len(current.agent_roles) else "")).strip(),
             provider_name=str(item.get("provider_name", "DeepSeek")),
             agent_count=max(int(item.get("agent_count", 1)), 1),
         )
-        for item in payload.get("agent_roles", [asdict(role) for role in current.agent_roles])
+        for index, item in enumerate(payload.get("agent_roles", [asdict(role) for role in current.agent_roles]))
     ]
+    providers, roles, _ = _materialize_provider_bindings(providers, roles)
     return SystemSettings(
         orchestration_mode=str(payload.get("orchestration_mode", current.orchestration_mode)),
         default_department=str(payload.get("default_department", current.default_department)),
@@ -499,6 +586,7 @@ def settings_from_payload(username: str, payload: dict[str, Any]) -> SystemSetti
 
 def provider_from_payload(payload: dict[str, Any]) -> APIProviderConfig:
     return APIProviderConfig(
+        provider_id=str(payload.get("provider_id", "")).strip(),
         provider_name=str(payload.get("provider_name", "OpenAI Compatible")).strip() or "OpenAI Compatible",
         model_name=str(payload.get("model_name", "")).strip(),
         endpoint=str(payload.get("endpoint", "")).strip(),
@@ -551,6 +639,39 @@ def _build_probe_targets(provider: APIProviderConfig) -> list[tuple[str, str, by
         ).encode("utf-8")
         targets.append(("POST", f"{base}/chat/completions", body))
     return targets
+
+
+def _build_text_probe_body(provider: APIProviderConfig) -> dict[str, Any]:
+    return {
+        "model": provider.model_name,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "temperature": 0,
+    }
+
+
+def _build_vision_probe_body(provider: APIProviderConfig) -> dict[str, Any]:
+    return {
+        "model": provider.model_name,
+        "messages": [
+            {"role": "system", "content": "Return only JSON."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": 'Verify that image input is working. Return JSON: {"ok":true,"note":""}.'},
+                    {"type": "image_url", "image_url": {"url": VISION_TEST_IMAGE_DATA_URL}},
+                ],
+            },
+        ],
+        "max_tokens": 64,
+        "temperature": 0,
+    }
+
+
+def _build_vision_probe_target(provider: APIProviderConfig) -> tuple[str, str, bytes]:
+    base = _normalize_provider_endpoint(provider.endpoint).rstrip("/")
+    body = json.dumps(_build_vision_probe_body(provider)).encode("utf-8")
+    return "POST", f"{base}/chat/completions", body
 
 
 def _request_provider_probe(url: str, method: str, api_key: str, body: bytes | None) -> tuple[int, str]:
@@ -634,12 +755,35 @@ def _extract_chat_content(payload: dict[str, Any]) -> str:
     raise ValueError("接口返回中未找到可用文本内容。")
 
 
+def _parse_json_text(raw: str) -> Any:
+    text = str(raw or "").strip()
+    if text.startswith("```"):
+        chunks = sorted(text.split("```"), key=len, reverse=True)
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if chunk.lower().startswith("json"):
+                chunk = chunk[4:].strip()
+            if chunk.startswith("{") or chunk.startswith("["):
+                return json.loads(chunk)
+    return json.loads(text)
+
+
+def _is_json_payload(raw: str) -> bool:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, (dict, list))
+
+
 def _resolve_single_model_provider(settings: SystemSettings) -> tuple[AgentRoleConfig, APIProviderConfig]:
     if not settings.agent_roles:
         raise ValueError("未配置 Agent Roles，无法进行单模型测试。")
     first_role = settings.agent_roles[0]
     for provider in settings.api_providers:
-        if provider.provider_name == first_role.provider_name:
+        if _provider_matches_role(provider, first_role):
             return first_role, provider
     raise ValueError("首个 Agent Role 绑定的接口不存在，请先检查设置。")
 
@@ -727,20 +871,62 @@ def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
     provider_payload = payload.get("provider") if isinstance(payload.get("provider"), dict) else payload
     provider = provider_from_payload(provider_payload)
     provider_name = provider.provider_name or "当前接口"
+    mode = str(payload.get("mode", "text")).strip().lower()
 
     if not provider.endpoint:
         raise ValueError("请先填写接口地址。")
     if not provider.api_key:
         raise ValueError("请先填写 API Key。")
+    if mode == "vision" and not provider.model_name:
+        raise ValueError("请先填写模型名，再测试视觉接口。")
+
+    if mode == "vision":
+        base = _normalize_provider_endpoint(provider.endpoint).rstrip("/")
+        url = f"{base}/chat/completions"
+        body = _build_vision_probe_body(provider)
+        try:
+            payload = _request_provider_json(url, provider.api_key, body, timeout=25)
+            content = _extract_chat_content(payload)
+            parsed = _parse_json_text(content)
+            if not isinstance(parsed, dict):
+                raise ValueError("接口返回的视觉测试结果不是 JSON 对象。")
+            return {"message": f"{provider_name} 视觉接口可用，图像输入测试通过。", "provider_name": provider_name}
+        except urllib_error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            detail = _extract_error_message(raw, f"HTTP {exc.code}")
+            if exc.code in {401, 403}:
+                raise ValueError(f"{provider_name} 视觉接口鉴权失败，请检查 API Key 或服务权限。") from exc
+            if exc.code == 429:
+                return {
+                    "message": f"{provider_name} 视觉接口可达，但当前触发限流或余额不足。",
+                    "provider_name": provider_name,
+                }
+            if exc.code == 400:
+                raise ValueError(f"{provider_name} 视觉测试失败：当前模型或端点不接受图像输入。{detail}") from exc
+            raise ValueError(f"{provider_name} 视觉测试失败：{detail}") from exc
+        except urllib_error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            raise ValueError(f"{provider_name} 视觉接口无法连接：{_trim_message(str(reason))}") from exc
+        except ValueError as exc:
+            raise ValueError(f"{provider_name} 视觉测试失败：{exc}") from exc
 
     last_message = "无法连接到接口。"
     for method, url, body in _build_probe_targets(provider):
         try:
-            _request_provider_probe(url, method, provider.api_key, body)
-            suffix = "接口可用。"
-            if method == "POST":
-                suffix = "接口可用，模型调用测试通过。"
-            return {"message": f"{provider_name} {suffix}", "provider_name": provider_name}
+            _, raw = _request_provider_probe(url, method, provider.api_key, body)
+            if method == "GET":
+                if not _is_json_payload(raw):
+                    last_message = f"{provider_name} /models 返回了非 JSON 内容，已尝试继续深度探测。"
+                    continue
+                return {"message": f"{provider_name} 接口可用。", "provider_name": provider_name}
+            payload = _request_provider_json(
+                url,
+                provider.api_key,
+                _build_text_probe_body(provider),
+                timeout=20,
+            )
+            _extract_chat_content(payload)
+            return {"message": f"{provider_name} 接口可用，模型调用测试通过。", "provider_name": provider_name}
         except urllib_error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
             detail = _extract_error_message(raw, f"HTTP {exc.code}")
@@ -755,6 +941,11 @@ def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
         except urllib_error.URLError as exc:
             reason = getattr(exc, "reason", exc)
             raise ValueError(f"{provider_name} 无法连接：{_trim_message(str(reason))}") from exc
+        except ValueError as exc:
+            if method == "GET":
+                last_message = f"{provider_name} 接口探测未返回可用 JSON，已尝试继续深度探测。"
+                continue
+            raise ValueError(f"{provider_name} 测试失败：{exc}") from exc
 
     raise ValueError(last_message)
 

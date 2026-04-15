@@ -31,6 +31,13 @@ def _join_items(items: list[str]) -> str:
     return ", ".join(item for item in items if item) or "none"
 
 
+def _short_error_text(error: object, *, limit: int = 160) -> str:
+    clean = " ".join(str(error or "").split())
+    if len(clean) <= limit:
+        return clean
+    return f"{clean[: limit - 1].rstrip()}..."
+
+
 def _normalize_provider_endpoint(endpoint: str) -> str:
     raw = endpoint.strip()
     if not raw:
@@ -99,8 +106,10 @@ def _resolve_planner_provider(settings: SystemSettings) -> Any | None:
     if planner_role is None:
         return None
     for provider in settings.api_providers:
+        role_provider_id = str(getattr(planner_role, "provider_id", "") or "").strip()
+        provider_id = str(getattr(provider, "provider_id", "") or "").strip()
         if (
-            provider.provider_name == planner_role.provider_name
+            ((role_provider_id and provider_id and provider_id == role_provider_id) or (not role_provider_id and provider.provider_name == planner_role.provider_name))
             and provider.enabled
             and provider.endpoint
             and provider.api_key
@@ -849,8 +858,9 @@ def compile_plan(
     payloads = _safe_image_payloads(image_payloads)
     visual_profile = None
     visual_stage_used = False
-    planner_provider = ""
-    planner_model = ""
+    planner_provider_config = _resolve_planner_provider(settings)
+    planner_provider = planner_provider_config.provider_name if planner_provider_config is not None else ""
+    planner_model = planner_provider_config.model_name if planner_provider_config is not None else ""
 
     if submission.uploaded_images:
         if not payloads:
@@ -858,7 +868,11 @@ def compile_plan(
         try:
             visual_profile, planner_provider, planner_model = _request_visual_profile(submission, settings, payloads)
         except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Planner visual retrieval failed: {exc}") from exc
+            provider_label = " / ".join(item for item in [planner_provider, planner_model] if item) or "未配置接口"
+            raise ValueError(
+                f"Planner 视觉检索失败：{provider_label} 当前不能完成图像输入调用。"
+                f" 请到设置页的 Planner / Executor 区域测试视觉接口。原始错误：{_short_error_text(exc)}"
+            ) from exc
         if visual_profile is None:
             raise ValueError("Planner visual retrieval did not return a task profile.")
         visual_stage_used = True
@@ -897,6 +911,7 @@ def compile_plan(
             if visual_stage_used
             else "Generated the downstream execution plan from the submitted task."
         ),
+        "visual_stage_used": visual_stage_used,
     }
 
 
@@ -921,7 +936,7 @@ def run_planner_case(
     title_seed = submission.chief_complaint or "uploaded medical image"
     executive_summary = (
         f"@Planner 已完成检索，并生成 {len(steps)} 步执行计划。"
-        if submission.uploaded_images
+        if plan.get("visual_stage_used")
         else f"@Planner 已基于当前输入生成 {len(steps)} 步执行计划。"
     )
     return EngineResult(

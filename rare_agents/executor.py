@@ -86,8 +86,10 @@ def _resolve_executor_provider(settings: SystemSettings) -> Any:
     if executor_role is None:
         raise ValueError("Executor role is not configured.")
     for provider in settings.api_providers:
+        role_provider_id = str(getattr(executor_role, "provider_id", "") or "").strip()
+        provider_id = str(getattr(provider, "provider_id", "") or "").strip()
         if (
-            provider.provider_name == executor_role.provider_name
+            ((role_provider_id and provider_id and provider_id == role_provider_id) or (not role_provider_id and provider.provider_name == executor_role.provider_name))
             and provider.enabled
             and provider.endpoint
             and provider.api_key
@@ -554,7 +556,14 @@ def run_executor_case(
     provider = _resolve_executor_provider(settings)
     safe_images = _safe_image_payloads(image_payloads)
     primary_image = safe_images[0] if safe_images else None
-    vision_probe = _request_vision_probe(provider, primary_image) if primary_image is not None else None
+    try:
+        vision_probe = _request_vision_probe(provider, primary_image) if primary_image is not None else None
+    except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
+        provider_label = " / ".join(item for item in [provider.provider_name, provider.model_name] if item) or "未配置接口"
+        raise ValueError(
+            f"Executor 视觉接口失败：{provider_label} 当前不能完成图像输入调用。"
+            f" 请到设置页的 Planner / Executor 区域测试视觉接口。原始错误：{str(exc).strip()}"
+        ) from exc
     if plan_bundle is None:
         raise ValueError("Executor requires a planner-generated execution plan in the current context. Invoke @Planner first.")
     plan = {
