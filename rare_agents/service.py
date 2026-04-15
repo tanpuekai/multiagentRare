@@ -30,10 +30,13 @@ from rare_agents.models import (
     EngineResult,
     OrchestrationMode,
     QueryHistoryItem,
+    SessionTurn,
     SystemSettings,
     default_profile,
     default_settings,
 )
+from rare_agents.executor import is_executor_invocation, run_executor_case, strip_executor_mention
+from rare_agents.planner import is_planner_invocation, run_planner_case, strip_planner_mention
 from rare_agents.storage import load_json, save_json
 
 
@@ -108,6 +111,7 @@ PROVIDER_LABELS = {
 ROLE_LABELS = {
     "Orchestrator": "编排协调",
     "Planner": "规划分析",
+    "Executor": "证据执行",
     "Generator": "生成起草",
     "Fact Checker": "事实核查",
     "Guideline Retriever": "指南检索",
@@ -136,6 +140,7 @@ ROLE_SPEC_MIGRATIONS = {
     "Coordinate specialist agents, drive convergence, remove contradictions, and produce a final answer fit for clinicians.": "负责协调各专科智能体、推动结论收敛、消除冲突，并生成适合临床阅读的最终结论。",
     "Drive structured case decomposition, round-based synthesis, and conflict resolution across the agent team.": "负责结构化拆解病例、统筹轮次级综合分析，并在智能体之间解决冲突。",
     "Map the differential diagnosis or treatment pathway, decide what evidence is needed next, and prioritize rare disease branches.": "规划鉴别诊断或治疗路径，明确下一步证据需求，并优先排序罕见病分支。",
+    "Evidence-based executor for multimodal diagnostic steps with grounding-ready outputs.": "负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
     "Generate clinician-facing draft answers with clear sections, professional wording, and department-specific detail.": "起草面向临床医生的结构化回答，要求表达专业、分区清晰，并体现专科细节。",
     "Check for inconsistencies, unsupported claims, unsafe recommendations, and missing coding or cost disclosures.": "核查前后不一致、证据不足、不安全建议，以及编码或费用披露缺失等问题。",
     "Anchor statements in Chinese and international rare disease, specialty, and perioperative guideline references.": "为结论补充中国与国际罕见病、专科及围手术期指南或共识依据。",
@@ -153,7 +158,7 @@ def migrate_profile(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
-    return [
+    migrated = [
         AgentRoleConfig(
             role_name=role.role_name,
             role_spec=ROLE_SPEC_MIGRATIONS.get(role.role_spec, role.role_spec),
@@ -162,6 +167,17 @@ def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
         )
         for role in roles
     ]
+    if not any(role.role_name == "Executor" for role in migrated):
+        planner_role = next((role for role in migrated if role.role_name == "Planner"), None)
+        migrated.append(
+            AgentRoleConfig(
+                role_name="Executor",
+                role_spec="负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
+                provider_name=planner_role.provider_name if planner_role else "DeepSeek",
+                agent_count=1,
+            )
+        )
+    return migrated
 
 
 def _user_paths(username: str) -> dict[str, Path]:
@@ -243,25 +259,173 @@ def _load_result(data: dict[str, Any] | None) -> EngineResult | None:
     return EngineResult(**data)
 
 
+def _load_turn(data: dict[str, Any] | None) -> SessionTurn | None:
+    if not data:
+        return None
+    submission = _load_submission(data.get("submission"))
+    result = _load_result(data.get("result"))
+    if submission is None or result is None:
+        return None
+    return SessionTurn(
+        timestamp=str(data.get("timestamp", "")),
+        user_input=str(data.get("user_input", "")),
+        submission=submission,
+        result=result,
+    )
+
+
+def _safe_image_assets(items: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    cleaned: list[dict[str, str]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        analysis_data_url = str(item.get("data_url", "")).strip()
+        display_data_url = str(item.get("display_data_url", "")).strip() or analysis_data_url
+        media_type = str(item.get("media_type", "")).strip() or "image/jpeg"
+        if not analysis_data_url.startswith("data:image/"):
+            continue
+        if not display_data_url.startswith("data:image/"):
+            display_data_url = analysis_data_url
+        cleaned.append(
+            {
+                "name": name,
+                "media_type": media_type,
+                "data_url": analysis_data_url,
+                "display_data_url": display_data_url,
+            }
+        )
+        if len(cleaned) >= 2:
+            break
+    return cleaned
+
+
+def _merge_named_lists(base_items: list[str], new_items: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in [*base_items, *new_items]:
+        value = str(item or "").strip()
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        merged.append(value)
+        seen.add(key)
+    return merged
+
+
+def _merge_image_assets(base_items: list[dict[str, str]], new_items: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: dict[str, dict[str, str]] = {}
+    for item in [*base_items, *new_items]:
+        key = str(item.get("name", "")).strip().lower() or str(len(merged))
+        merged[key] = item
+    return list(merged.values())[:2]
+
+
+def _merge_case_summary(base_summary: str, next_summary: str) -> str:
+    base = str(base_summary or "").strip()
+    current = str(next_summary or "").strip()
+    if not base:
+        return current
+    if not current or current == base:
+        return base
+    if current.lower().startswith("please continue") or current.lower().startswith("continue "):
+        return base
+    return f"{base}\n\nFollow-up instruction:\n{current}"
+
+
+def _merged_submission_context(base: CaseSubmission | None, current: CaseSubmission) -> CaseSubmission:
+    if base is None:
+        return current
+    merged_assets = _merge_image_assets(base.image_assets, current.image_assets)
+    merged_images = _merge_named_lists(base.uploaded_images, current.uploaded_images or [item["name"] for item in merged_assets])
+    merged_docs = _merge_named_lists(base.uploaded_docs, current.uploaded_docs)
+    return CaseSubmission(
+        department=current.department or base.department,
+        output_style=current.output_style or base.output_style,
+        urgency=current.urgency or base.urgency,
+        chief_complaint=current.chief_complaint or base.chief_complaint,
+        case_summary=_merge_case_summary(base.case_summary, current.case_summary),
+        patient_age=current.patient_age or base.patient_age,
+        patient_sex=current.patient_sex or base.patient_sex,
+        insurance_type=current.insurance_type or base.insurance_type,
+        uploaded_images=merged_images,
+        uploaded_docs=merged_docs,
+        show_process=current.show_process if current.show_process is not None else base.show_process,
+        image_assets=merged_assets,
+        single_model_test=current.single_model_test,
+        is_ready=current.is_ready,
+    )
+
+
+def _analysis_payloads_from_submission(submission: CaseSubmission) -> list[dict[str, str]]:
+    return [
+        {
+            "name": item["name"],
+            "media_type": item.get("media_type", "image/jpeg"),
+            "data_url": item["data_url"],
+        }
+        for item in submission.image_assets
+        if str(item.get("data_url", "")).startswith("data:image/")
+    ]
+
+
+def _latest_planner_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
+    if session is None:
+        return None
+    turns = session.turns or []
+    for turn in reversed(turns):
+        if turn.result.execution_mode != "planner":
+            continue
+        if not turn.result.plan_steps:
+            continue
+        trace = turn.result.agent_trace[0] if turn.result.agent_trace else {}
+        return {
+            "steps": turn.result.plan_steps,
+            "display_steps": turn.result.plan_display_steps,
+            "references": turn.result.references,
+            "provider": turn.result.serving_provider,
+            "model": turn.result.serving_model,
+            "note": str(trace.get("note") or "Loaded the existing planner-generated execution plan from context."),
+        }
+    return None
+
+
 def load_sessions(username: str) -> list[CaseSessionRecord]:
     ensure_storage(username)
     raw = load_json(_user_paths(username)["sessions"], [])
     if raw:
-        return [
-            CaseSessionRecord(
-                session_id=item["session_id"],
-                timestamp=item["timestamp"],
-                title=item["title"],
-                department=item["department"],
-                output_style=item["output_style"],
-                summary=item["summary"],
-                consensus_score=float(item["consensus_score"]),
-                show_in_sidebar=bool(item.get("show_in_sidebar", True)),
-                submission=_load_submission(item.get("submission")),
-                result=_load_result(item.get("result")),
+        sessions: list[CaseSessionRecord] = []
+        for item in raw:
+            submission = _load_submission(item.get("submission"))
+            result = _load_result(item.get("result"))
+            turns = [_load_turn(turn) for turn in item.get("turns", [])]
+            materialized_turns = [turn for turn in turns if turn is not None]
+            if not materialized_turns and submission is not None and result is not None:
+                materialized_turns = [
+                    SessionTurn(
+                        timestamp=str(item.get("timestamp", "")),
+                        user_input=submission.case_summary,
+                        submission=submission,
+                        result=result,
+                    )
+                ]
+            sessions.append(
+                CaseSessionRecord(
+                    session_id=item["session_id"],
+                    timestamp=item["timestamp"],
+                    title=item["title"],
+                    department=item["department"],
+                    output_style=item["output_style"],
+                    summary=item["summary"],
+                    consensus_score=float(item["consensus_score"]),
+                    show_in_sidebar=bool(item.get("show_in_sidebar", True)),
+                    submission=submission,
+                    result=result,
+                    context_submission=_load_submission(item.get("context_submission")) or submission,
+                    turns=materialized_turns,
+                )
             )
-            for item in raw
-        ]
+        return sessions
 
     history = load_history(username)
     return [
@@ -598,13 +762,32 @@ def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
 def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings(username)
     profile = load_profile(username)
-    main_text = str(payload.get("case_summary", "")).strip()
+    sessions = load_sessions(username)
+    raw_text = str(payload.get("case_summary", "")).strip()
+    context_session_id = str(payload.get("context_session_id", "")).strip()
+    active_session = next((session for session in sessions if session.session_id == context_session_id), None) if context_session_id else None
+    executor_requested = is_executor_invocation(raw_text)
+    planner_requested = is_planner_invocation(raw_text)
+    if executor_requested:
+        main_text = strip_executor_mention(raw_text)
+    elif planner_requested:
+        main_text = strip_planner_mention(raw_text)
+    else:
+        main_text = raw_text
+    image_assets = _safe_image_assets(
+        payload.get("uploaded_image_assets")
+        if isinstance(payload.get("uploaded_image_assets"), list)
+        else payload.get("uploaded_image_payloads")
+    )
     if not main_text:
-        raise ValueError("请先输入病例摘要。")
+        if active_session and active_session.context_submission:
+            main_text = active_session.context_submission.case_summary
+        else:
+            raise ValueError("请先输入病例摘要，或在已有上下文中继续执行。")
 
     prefill = parse_ehr_intake(main_text, settings.default_department)
 
-    submission = CaseSubmission(
+    incoming_submission = CaseSubmission(
         department=_select_value(payload, "department", prefill.department or settings.default_department),
         output_style=_select_value(payload, "output_style", prefill.output_style or OUTPUT_STYLES[0]),
         urgency=_select_value(payload, "urgency", prefill.urgency or URGENCY_OPTIONS[0]),
@@ -616,15 +799,69 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
         uploaded_images=[str(item) for item in payload.get("uploaded_images", [])],
         uploaded_docs=[str(item) for item in payload.get("uploaded_docs", [])],
         show_process=bool(payload.get("show_process", settings.show_diagnostics)),
+        image_assets=image_assets,
         single_model_test=bool(payload.get("single_model_test", False)),
     )
-
-    result = (
-        _run_single_model_provider_case(submission=submission, profile=profile, settings=settings)
-        if submission.single_model_test
-        else run_multiagent_case(submission=submission, profile=profile, settings=settings)
+    submission = _merged_submission_context(
+        active_session.context_submission if active_session and active_session.context_submission else None,
+        incoming_submission,
     )
-    session = CaseSessionRecord.from_result(uuid4().hex[:12], submission, result)
+    planner_image_payloads = _analysis_payloads_from_submission(submission)
+
+    if executor_requested:
+        plan_bundle = _latest_planner_bundle(active_session)
+        if plan_bundle is None:
+            raise ValueError("当前上下文中没有可执行的诊断计划。请先调用 @Planner 生成 plan。")
+        result = run_executor_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            image_payloads=planner_image_payloads,
+            plan_bundle=plan_bundle,
+        )
+    elif planner_requested:
+        result = run_planner_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            image_payloads=planner_image_payloads,
+        )
+    else:
+        result = (
+            _run_single_model_provider_case(submission=submission, profile=profile, settings=settings)
+            if submission.single_model_test
+            else run_multiagent_case(submission=submission, profile=profile, settings=settings)
+        )
+    if active_session and not active_session.session_id.startswith("history-"):
+        turn_timestamp = QueryHistoryItem.from_result(submission, result).timestamp
+        active_session.timestamp = turn_timestamp
+        active_session.title = result.title
+        active_session.department = submission.department
+        active_session.output_style = submission.output_style
+        active_session.summary = result.executive_summary
+        active_session.consensus_score = result.consensus_score
+        active_session.submission = submission
+        active_session.result = result
+        active_session.context_submission = submission
+        active_session.turns.append(
+            SessionTurn(
+                timestamp=turn_timestamp,
+                user_input=raw_text or submission.case_summary,
+                submission=submission,
+                result=result,
+            )
+        )
+        session = active_session
+        sessions = [session] + [item for item in sessions if item.session_id != session.session_id]
+    else:
+        session = CaseSessionRecord.from_result(
+            uuid4().hex[:12],
+            submission,
+            result,
+            user_input=raw_text or submission.case_summary,
+        )
+        sessions = [session] + sessions
+
     history_item = QueryHistoryItem(
         timestamp=session.timestamp,
         title=session.title,
@@ -633,8 +870,6 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
         summary=session.summary,
         consensus_score=session.consensus_score,
     )
-
-    sessions = [session] + load_sessions(username)
     history = [history_item] + load_history(username)
     save_sessions(username, sessions)
     save_history(username, history)
@@ -682,6 +917,8 @@ def serialize_session(session: CaseSessionRecord, *, include_details: bool = Tru
     if include_details:
         payload["submission"] = asdict(session.submission) if session.submission else None
         payload["result"] = asdict(session.result) if session.result else None
+        payload["context_submission"] = asdict(session.context_submission) if session.context_submission else None
+        payload["turns"] = [asdict(turn) for turn in session.turns]
     return payload
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -33,6 +34,7 @@ ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
 
 app = FastAPI(title="RareMDT", version="2.0.0")
+logger = logging.getLogger("raremdt.api")
 
 app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
 app.mount("/vendor", StaticFiles(directory=FRONTEND_DIR / "vendor"), name="vendor")
@@ -201,6 +203,7 @@ async def diagnose(request: Request) -> dict:
     try:
         return submit_case(user["username"], payload)
     except ValueError as exc:
+        logger.exception("diagnose failed for user=%s detail=%s", user.get("username"), exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

@@ -761,6 +761,8 @@ a {
   --workspace-inline-padding: 24px;
   --composer-inline-offset: 8px;
   --empty-workspace-floor: 232px;
+  --composer-clearance: 306px;
+  --composer-backdrop-height: 320px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -780,7 +782,7 @@ a {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 240px;
+  height: var(--composer-backdrop-height);
   z-index: 7;
   pointer-events: none;
   background: linear-gradient(
@@ -805,6 +807,16 @@ a {
     rgba(0, 0, 0, 0.56) 66%,
     rgba(0, 0, 0, 0.96) 100%
   );
+}
+
+.shell-main:has(.composer-shell .status-card) {
+  --composer-clearance: 380px;
+  --composer-backdrop-height: 396px;
+}
+
+.shell-main:has(.composer-shell .advanced-panel) {
+  --composer-clearance: 520px;
+  --composer-backdrop-height: 536px;
 }
 
 .workspace-region {
@@ -930,7 +942,8 @@ a {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 var(--workspace-inline-padding) 196px;
+  padding: 0 var(--workspace-inline-padding) var(--composer-clearance);
+  scroll-padding-bottom: var(--composer-clearance);
   background: transparent;
 }
 
@@ -1506,6 +1519,56 @@ a {
   margin-top: 20px;
 }
 
+.result-raw-details {
+  margin-top: 18px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.8);
+  border: 1px solid var(--border-soft);
+  padding: 10px 12px;
+}
+
+.result-raw-details > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: rgba(51, 65, 85, 0.92);
+}
+
+.result-raw-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.result-raw-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-raw-label {
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(71, 85, 105, 0.82);
+  font-weight: 700;
+}
+
+.result-raw-block {
+  margin: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.78);
+  padding: 12px 13px;
+  color: rgba(30, 41, 59, 0.92);
+  font-size: 0.84rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 320px;
+}
+
 .markdown-panel,
 .info-panel {
   border-radius: 22px;
@@ -1993,6 +2056,7 @@ a {
   box-shadow: 4px 5px 12px rgba(15, 23, 42, 0.08);
   backdrop-filter: none;
   overflow: visible;
+  max-height: min(620px, calc(100% - 28px));
 }
 
 .composer-body {
@@ -2000,6 +2064,8 @@ a {
   flex-direction: column;
   gap: 8px;
   padding: 18px 18px 11px;
+  max-height: inherit;
+  overflow: auto;
 }
 
 .composer-textarea-wrap {
@@ -2073,6 +2139,7 @@ a {
 .composer-textarea {
   width: 100%;
   min-height: 136px;
+  max-height: 220px;
   border: 0;
   border-radius: 12px;
   outline: none;
@@ -2088,6 +2155,7 @@ a {
   white-space: pre-wrap;
   word-break: break-word;
   cursor: text;
+  overflow-y: auto;
 }
 
 .composer-editor:empty::before {
@@ -2111,11 +2179,12 @@ a {
 }
 
 .slash-menu-stack {
-  position: absolute;
+  position: fixed;
   display: flex;
   align-items: flex-start;
   gap: 8px;
   z-index: 24;
+  max-width: calc(100vw - 28px);
 }
 
 .slash-menu-popup {
@@ -2196,6 +2265,12 @@ a {
   font-size: 0.92rem;
   font-weight: 700;
   color: inherit;
+}
+
+.slash-menu-hint {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-faint);
 }
 
 .slash-menu-arrow {

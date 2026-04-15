@@ -1,15 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/react@18.3.1";
-import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
-import htm from "https://esm.sh/htm@3.1.1";
-import { marked } from "https://esm.sh/marked@12.0.2";
-import DOMPurify from "https://esm.sh/dompurify@3.1.6";
-import {
-  AssistantRuntimeProvider,
-  ThreadPrimitive,
-  useExternalStoreRuntime,
-} from "https://esm.sh/@assistant-ui/react@0.12.24?bundle&deps=react@18.3.1,react-dom@18.3.1";
-
-const html = htm.bind(React.createElement);
+(function () {
+  const { useEffect, useMemo, useRef, useState } = React;
+  const html = htm.bind(React.createElement);
 
   const ICON_PATHS = {
     plus: "M12 5v14M5 12h14",
@@ -156,6 +147,37 @@ const html = htm.bind(React.createElement);
     },
   ];
 
+  const AGENT_MENU_TREE = [
+    {
+      id: "planner",
+      label: "@Planner",
+      hint: "根据输入生成执行计划",
+      searchText: "planner 计划 执行 workflow",
+      tokenLabel: "@Planner",
+      value: "planner",
+    },
+    {
+      id: "executor",
+      label: "@Executor",
+      hint: "按计划执行并记录证据",
+      searchText: "executor 证据 grounding 多模态 执行",
+      tokenLabel: "@Executor",
+      value: "executor",
+    },
+  ];
+
+  function commandTreeForTrigger(trigger) {
+    return trigger === "@" ? AGENT_MENU_TREE : SLASH_MENU_TREE;
+  }
+
+  function isPlannerInvocation(text) {
+    return /@planner\b/i.test(String(text || ""));
+  }
+
+  function isExecutorInvocation(text) {
+    return /@executor\b/i.test(String(text || ""));
+  }
+
   function normalizeSearchText(value) {
     return String(value || "").toLowerCase().replace(/\s+/g, "");
   }
@@ -202,6 +224,109 @@ const html = htm.bind(React.createElement);
     return JSON.stringify(normalizeCaseBlocks(blocks));
   }
 
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error(`无法读取文件 ${file?.name || ""}`.trim()));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImageElement(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("无法解析上传图像。"));
+      image.src = dataUrl;
+    });
+  }
+
+  async function normalizeImageForAgent(file, sourceDataUrl) {
+    const source = sourceDataUrl || (await readFileAsDataUrl(file));
+    if (!source.startsWith("data:image/")) {
+      throw new Error(`不支持的图像格式: ${file?.name || ""}`.trim());
+    }
+    const image = await loadImageElement(source);
+    const maxEdge = 1024;
+    const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+    const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+    const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("无法初始化图像标准化上下文。");
+    }
+    context.drawImage(image, 0, 0, width, height);
+    return {
+      name: file.name,
+      media_type: "image/jpeg",
+      data_url: canvas.toDataURL("image/jpeg", 0.92),
+    };
+  }
+
+  async function serializeImageAssets(files) {
+    const payloads = [];
+    for (const file of Array.from(files || []).slice(0, 2)) {
+      const displayDataUrl = await readFileAsDataUrl(file);
+      const normalized = await normalizeImageForAgent(file, displayDataUrl);
+      payloads.push({
+        name: file.name,
+        media_type: file.type || normalized.media_type,
+        data_url: normalized.data_url,
+        display_data_url: displayDataUrl,
+      });
+    }
+    return payloads;
+  }
+
+  function imageAssetsFromSubmission(submission) {
+    return Array.isArray(submission?.image_assets) ? submission.image_assets.filter((item) => item?.display_data_url || item?.data_url) : [];
+  }
+
+  function imageSrcFromAsset(asset) {
+    return asset?.display_data_url || asset?.data_url || "";
+  }
+
+  function groundingPayload(record) {
+    return record?.evidence?.grounding && typeof record.evidence.grounding === "object" ? record.evidence.grounding : null;
+  }
+
+  function hasGroundingEvidence(record) {
+    const grounding = groundingPayload(record);
+    if (!grounding) {
+      return false;
+    }
+    const boundary = Array.isArray(grounding.boundary_points) ? grounding.boundary_points : [];
+    const bbox = Array.isArray(grounding.bbox) ? grounding.bbox : Array.isArray(grounding.coarse_bbox) ? grounding.coarse_bbox : [];
+    const point = Array.isArray(grounding.positive_point) ? grounding.positive_point : [];
+    return Boolean(boundary.length || bbox.length === 4 || point.length === 2);
+  }
+
+  function overlayColor(index) {
+    const palette = ["#d43f2e", "#2563eb", "#0f766e", "#b45309", "#7c3aed", "#be123c", "#0369a1"];
+    return palette[index % palette.length];
+  }
+
+  function buildTurnList(session) {
+    if (Array.isArray(session?.turns) && session.turns.length) {
+      return session.turns;
+    }
+    if (session?.submission && session?.result) {
+      return [
+        {
+          timestamp: session.timestamp,
+          user_input: session.submission.case_summary,
+          submission: session.submission,
+          result: session.result,
+        },
+      ];
+    }
+    return [];
+  }
+
   function createEditorTokenElement(token) {
     const element = document.createElement("span");
     element.className = "editor-token";
@@ -235,6 +360,28 @@ const html = htm.bind(React.createElement);
 
       const element = node;
       if (element.classList.contains("editor-token")) {
+        const tokenLabel = element.dataset.tokenLabel || element.textContent || "";
+        const tokenValue = element.dataset.tokenValue || "";
+        if (tokenValue === "planner" || tokenLabel === "@Planner") {
+          blocks.push({
+            type: "token",
+            label: tokenLabel || "@Planner",
+            text: "@Planner",
+            category: "agent",
+            value: "planner",
+          });
+          return;
+        }
+        if (tokenValue === "executor" || tokenLabel === "@Executor") {
+          blocks.push({
+            type: "token",
+            label: tokenLabel || "@Executor",
+            text: "@Executor",
+            category: "agent",
+            value: "executor",
+          });
+          return;
+        }
         blocks.push({
           type: "token",
           label: element.dataset.tokenLabel || element.textContent || "",
@@ -270,8 +417,8 @@ const html = htm.bind(React.createElement);
     });
   }
 
-  function getSlashItems(path) {
-    let current = SLASH_MENU_TREE;
+  function getSlashItems(path, trigger = "/") {
+    let current = commandTreeForTrigger(trigger);
     for (const step of path || []) {
       const matched = current.find((item) => item.id === step);
       if (!matched || !matched.children) {
@@ -292,8 +439,8 @@ const html = htm.bind(React.createElement);
     );
   }
 
-  function buildSlashToken(item, path) {
-    const parents = path.map((step) => getSlashItems([]).find((root) => root.id === step)).filter(Boolean);
+  function buildSlashToken(item, path, trigger = "/") {
+    const parents = path.map((step) => getSlashItems([], trigger).find((root) => root.id === step)).filter(Boolean);
     const category = parents.length ? parents[parents.length - 1].label : "";
     const label = item.tokenLabel || (category ? `${category}·${item.label}` : item.label);
     return {
@@ -376,10 +523,16 @@ const html = htm.bind(React.createElement);
     }
 
     const textBefore = (node.nodeValue || "").slice(0, offset);
-    const slashIndex = textBefore.lastIndexOf("/");
-    if (slashIndex < 0) {
+    const triggerCandidates = [
+      { trigger: "/", index: textBefore.lastIndexOf("/") },
+      { trigger: "@", index: textBefore.lastIndexOf("@") },
+    ].filter((item) => item.index >= 0);
+    if (!triggerCandidates.length) {
       return null;
     }
+    const activeTrigger = triggerCandidates.sort((left, right) => right.index - left.index)[0];
+    const slashIndex = activeTrigger.index;
+    const trigger = activeTrigger.trigger;
 
     const query = textBefore.slice(slashIndex + 1);
     const previousChar = slashIndex > 0 ? textBefore[slashIndex - 1] : "";
@@ -393,16 +546,35 @@ const html = htm.bind(React.createElement);
     const caretRange = triggerRange.cloneRange();
     caretRange.collapse(false);
     const rect = caretRange.getBoundingClientRect();
-    const wrapRect = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0 };
+    void wrap;
+    const viewportMargin = 14;
+    const estimatedMenuWidth = 560;
+    const estimatedMenuHeight = 360;
+    const left = Math.max(viewportMargin, Math.min(rect.left, window.innerWidth - estimatedMenuWidth - viewportMargin));
+    const spaceBelow = window.innerHeight - rect.bottom - viewportMargin;
+    const spaceAbove = rect.top - viewportMargin;
+    const openDownward = spaceBelow >= 220 || spaceBelow >= spaceAbove;
+    const top = openDownward
+      ? Math.max(viewportMargin, Math.min(rect.bottom + 8, window.innerHeight - viewportMargin - 180))
+      : Math.max(viewportMargin, rect.top - Math.min(estimatedMenuHeight, Math.max(180, spaceAbove)) - 8);
+    const maxHeight = Math.max(
+      180,
+      openDownward
+        ? window.innerHeight - top - viewportMargin
+        : rect.top - viewportMargin - 8
+    );
 
     return {
       node,
       slashIndex,
       endOffset: offset,
       query,
+      trigger,
       position: {
-        left: Math.max(14, rect.left - wrapRect.left),
-        bottom: Math.max(24, wrapRect.bottom - rect.top + 8),
+        left,
+        top,
+        maxHeight: Math.min(estimatedMenuHeight, maxHeight),
+        placement: openDownward ? "down" : "up",
       },
     };
   }
@@ -499,8 +671,10 @@ const html = htm.bind(React.createElement);
       ...options,
     });
     let payload = {};
+    let rawText = "";
     try {
-      payload = await response.json();
+      rawText = await response.text();
+      payload = rawText ? JSON.parse(rawText) : {};
     } catch (error) {
       payload = {};
     }
@@ -508,7 +682,8 @@ const html = htm.bind(React.createElement);
       if (response.status === 401) {
         writeAuthToken("");
       }
-      const error = new Error(payload.detail || "Request failed.");
+      const detail = payload.detail || rawText || `Request failed with status ${response.status}.`;
+      const error = new Error(detail);
       error.status = response.status;
       throw error;
     }
@@ -837,416 +1012,92 @@ const html = htm.bind(React.createElement);
     `;
   }
 
-  function getThreadMessageText(message) {
-    return (message?.content || [])
-      .filter((part) => part?.type === "text" || part?.type === "reasoning")
-      .map((part) => String(part.text || ""))
-      .join("\n\n")
-      .trim();
-  }
-
-  function makeThreadMessage({ id, role, text = "", createdAt = "", metadata = {} }) {
-    return {
-      id,
-      role,
-      createdAt: createdAt || undefined,
-      content: text ? [{ type: "text", text }] : [],
-      metadata: { custom: metadata },
-    };
-  }
-
-  function buildConversationState(session, pendingSubmission) {
-    if (pendingSubmission) {
-      const messages = [
-        makeThreadMessage({
-          id: "pending-user",
-          role: "user",
-          text: pendingSubmission.case_summary,
-          createdAt: pendingSubmission.timestamp,
-          metadata: {
-            kind: "submission",
-            timestamp: pendingSubmission.timestamp,
-          },
-        }),
-      ];
-
-      if (pendingSubmission.execution?.mode === "single_model") {
-        messages.push(
-          makeThreadMessage({
-            id: "pending-execution-status",
-            role: "assistant",
-            createdAt: pendingSubmission.timestamp,
-            metadata: {
-              kind: "execution-status",
-              pending: true,
-              executionMode: "single_model",
-              providerName: pendingSubmission.execution.providerName || "未配置",
-              modelName: pendingSubmission.execution.modelName || "未配置模型",
-            },
-          })
-        );
-      }
-
-      return { messages, isRunning: true };
-    }
-
-    if (!session) {
-      return { messages: [], isRunning: false };
-    }
-
-    if (!session.result || !session.submission) {
-      return {
-        messages: [
-          makeThreadMessage({
-            id: `legacy-${session.session_id}`,
-            role: "assistant",
-            text: session.summary || "该记录来自旧版历史摘要，暂未保存完整诊断面板与多智能体过程数据。",
-            createdAt: session.timestamp,
-            metadata: {
-              kind: "legacy-summary",
-              session,
-            },
-          }),
-        ],
-        isRunning: false,
-      };
-    }
-
-    const messages = [
-      makeThreadMessage({
-        id: `submission-${session.session_id}`,
-        role: "user",
-        text: session.submission.case_summary,
-        createdAt: session.timestamp,
-        metadata: {
-          kind: "submission",
-          timestamp: session.timestamp,
-        },
-      }),
-    ];
-
-    if (session.result.execution_mode === "single_model") {
-      messages.push(
-        makeThreadMessage({
-          id: `status-${session.session_id}`,
-          role: "assistant",
-          createdAt: session.timestamp,
-          metadata: {
-            kind: "execution-status",
-            pending: false,
-            executionMode: "single_model",
-            providerName: session.result.serving_provider || "未配置",
-            modelName: session.result.serving_model || "未配置模型",
-          },
-        })
-      );
-    }
-
-    messages.push(
-      makeThreadMessage({
-        id: `result-${session.session_id}`,
-        role: "assistant",
-        text: session.result.professional_answer || "",
-        createdAt: session.timestamp,
-        metadata: {
-          kind: "result",
-          timestamp: session.timestamp,
-          result: session.result,
-        },
-      })
-    );
-
-    return { messages, isRunning: false };
-  }
-
-  function ConversationThreadHeader() {
-    return html`
-      <div className="assistant-thread-head">
-        <div className="assistant-thread-head-title">RareMDT Conversation</div>
-        <div className="assistant-thread-head-chip">Assistant-UI Thread</div>
-      </div>
-    `;
-  }
-
-  function ConversationUserMessage({ message }) {
-    const custom = message?.metadata?.custom || {};
-    const text = getThreadMessageText(message);
-
-    return html`
-      <div className="thread-message thread-message-user">
-        <div className="thread-row thread-row-user">
-          <div className="thread-bubble thread-bubble-user">
-            <div className="thread-message-meta">
-              <span>病例输入</span>
-              <span>·</span>
-              <span>${formatTimestamp(custom.timestamp || message.createdAt || "")}</span>
-            </div>
-            <div className="thread-message-text">${text}</div>
-          </div>
-          <div className="thread-avatar thread-avatar-user">你</div>
+  function ExecutionStatusCard({ executionMode, providerName, modelName, isPending = false }) {
+    if (executionMode === "planner") {
+      return html`
+        <div className=${cx("status-card", isPending && "is-pending")}>
+          <div className="status-card-title">@Planner</div>
+          <div className="status-card-copy">已完成检索并生成执行计划</div>
         </div>
-      </div>
-    `;
-  }
-
-  function ConversationExecutionStatus({ custom }) {
-    return html`
-      <div className="thread-message thread-message-status">
-        <div className="thread-row">
-          <div className="thread-avatar thread-avatar-assistant">AI</div>
-          <div className=${cx("thread-status-pill", custom.pending && "is-pending")}>
-            <div className="thread-status-label">单模型测试已启用</div>
-            <div className="thread-status-value">${custom.providerName} / ${custom.modelName}</div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function ConversationThinkingMessage() {
-    return html`
-      <div className="thread-message thread-message-assistant">
-        <div className="thread-row">
-          <div className="thread-avatar thread-avatar-assistant">AI</div>
-          <div className="thread-bubble thread-bubble-assistant thread-bubble-thinking">
-            <div className="thread-message-meta">
-              <span>RareMDT Assistant</span>
-              <span>·</span>
-              <span>正在分析</span>
-            </div>
-            <div className="thread-thinking-row">
-              <span className="thread-thinking-dot"></span>
-              <span className="thread-thinking-dot"></span>
-              <span className="thread-thinking-dot"></span>
-              <span className="thread-thinking-copy">系统正在整理临床判断与诊疗建议…</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function ConversationLegacySummary({ session, meta }) {
-    return html`
-      <div className="thread-message thread-message-assistant">
-        <div className="thread-row">
-          <div className="thread-avatar thread-avatar-assistant">AI</div>
-          <div className="thread-bubble thread-bubble-assistant">
-            <div className="thread-message-meta">
-              <span>RareMDT Assistant</span>
-              <span>·</span>
-              <span>${formatTimestamp(session.timestamp)}</span>
-            </div>
-            <div className="thread-response-shell">
-              <div className="thread-response-head">
-                <div>
-                  <div className="thread-response-title">${session.title}</div>
-                  <div className="thread-response-summary">${session.summary}</div>
-                </div>
-                <div className="badge-row">
-                  <span className="badge">${label(meta, "department", session.department)}</span>
-                  <span className="badge">${label(meta, "output", session.output_style)}</span>
-                </div>
-              </div>
-              <div className="thread-muted-panel">该记录来自旧版历史摘要，暂未保存完整诊断面板与多智能体过程数据。</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function ConversationAssistantResult({ result, timestamp, meta }) {
-    const bodyHtml = markdownToHtml(result.professional_answer || "");
-    const rawModelText = result.raw_model_text || result.professional_answer || "";
-    const rawProviderRequest = result.raw_provider_request || "";
-    const rawProviderPayload = result.raw_provider_payload || "";
-    const showRawSection = Boolean(rawModelText || rawProviderRequest || rawProviderPayload);
-
-    return html`
-      <div className="thread-message thread-message-assistant">
-        <div className="thread-row">
-          <div className="thread-avatar thread-avatar-assistant">AI</div>
-          <div className="thread-bubble thread-bubble-assistant">
-            <div className="thread-message-meta">
-              <span>RareMDT Assistant</span>
-              <span>·</span>
-              <span>${formatTimestamp(timestamp)}</span>
-            </div>
-
-            <div className="thread-response-shell">
-              <div className="thread-response-head">
-                <div>
-                  <div className="thread-response-title">${result.title}</div>
-                  <div className="thread-response-summary">${result.executive_summary}</div>
-                </div>
-                <div className="badge-row">
-                  <span className="badge">${label(meta, "department", result.department)}</span>
-                  <span className="badge">${label(meta, "output", result.output_style)}</span>
-                  <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
-                </div>
-              </div>
-
-              <div className="thread-markdown-panel" dangerouslySetInnerHTML=${{ __html: bodyHtml }}></div>
-
-              ${showRawSection &&
-              html`
-                <details className="thread-details thread-raw-details">
-                  <summary>查看原始模型响应（用于核查）</summary>
-                  <div className="thread-details-body">
-                    ${rawProviderRequest &&
-                    html`
-                      <div className="thread-raw-label">请求 JSON</div>
-                      <pre className="thread-raw-response thread-raw-json">${rawProviderRequest}</pre>
-                    `}
-                    ${rawProviderPayload &&
-                    html`
-                      <div className="thread-raw-label">API 原始 JSON</div>
-                      <pre className="thread-raw-response thread-raw-json">${rawProviderPayload}</pre>
-                    `}
-                    <div className="thread-raw-label">模型文本</div>
-                    <pre className="thread-raw-response">${rawModelText || "模型未返回可用文本。"}</pre>
-                  </div>
-                </details>
-              `}
-
-              <div className="thread-support-grid">
-                <div className="thread-support-card">
-                  <div className="thread-support-title">下一步建议</div>
-                  <div className="thread-support-list">
-                    ${result.next_steps.map(
-                      (step, index) => html`
-                        <div key=${index} className="thread-support-item">
-                          <${Icon} name="spark" size=${15} />
-                          <span>${step}</span>
-                        </div>
-                      `
-                    )}
-                  </div>
-                </div>
-                <div className="thread-support-card">
-                  <div className="thread-support-title">安全提醒</div>
-                  <div className="thread-support-note">${result.safety_note}</div>
-                </div>
-              </div>
-
-              <details className="thread-details">
-                <summary>展开编码、费用与参考依据</summary>
-                <div className="thread-details-body">
-                  <${DataTableCard}
-                    title="编码建议"
-                    rows=${result.coding_table}
-                    columns=${[
-                      { key: "编码体系", label: "编码体系" },
-                      { key: "建议编码", label: "建议编码" },
-                      { key: "临床用途", label: "临床用途" },
-                    ]}
-                  />
-
-                  <${DataTableCard}
-                    title="费用评估"
-                    rows=${result.cost_table}
-                    columns=${[
-                      { key: "项目", label: "项目" },
-                      { key: "估算", label: "估算" },
-                    ]}
-                  />
-
-                  <${DataTableCard}
-                    title="参考依据"
-                    rows=${result.references}
-                    columns=${[
-                      { key: "type", label: "来源" },
-                      { key: "title", label: "标题" },
-                      { key: "region", label: "区域" },
-                    ]}
-                  />
-                </div>
-              </details>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function ConversationAssistantMessage({ message, meta }) {
-    const custom = message?.metadata?.custom || {};
-    const text = getThreadMessageText(message);
-
-    if (custom.kind === "execution-status") {
-      return html`<${ConversationExecutionStatus} custom=${custom} />`;
+      `;
     }
 
-    if (custom.kind === "legacy-summary") {
-      return html`<${ConversationLegacySummary} session=${custom.session} meta=${meta} />`;
-    }
-
-    if (custom.kind === "result" && custom.result) {
-      return html`<${ConversationAssistantResult} result=${custom.result} timestamp=${custom.timestamp} meta=${meta} />`;
-    }
-
-    if (!text) {
-      return html`<${ConversationThinkingMessage} />`;
-    }
-
-    return html`
-      <div className="thread-message thread-message-assistant">
-        <div className="thread-row">
-          <div className="thread-avatar thread-avatar-assistant">AI</div>
-          <div className="thread-bubble thread-bubble-assistant">
-            <div className="thread-message-meta">
-              <span>RareMDT Assistant</span>
-            </div>
-            <div className="thread-markdown-panel" dangerouslySetInnerHTML=${{ __html: markdownToHtml(text) }}></div>
-          </div>
+    if (executionMode === "executor") {
+      return html`
+        <div className=${cx("status-card", isPending && "is-pending")}>
+          <div className="status-card-title">@Executor</div>
+          <div className="status-card-copy">${isPending ? "正在按计划执行并记录证据" : "已按计划完成执行并记录证据"}</div>
         </div>
-      </div>
-    `;
-  }
+      `;
+    }
 
-  function ConversationThread({ session = null, pendingSubmission = null, meta }) {
-    const threadState = useMemo(
-      () => buildConversationState(session, pendingSubmission),
-      [session, pendingSubmission]
-    );
-
-    const runtime = useExternalStoreRuntime({
-      messages: threadState.messages,
-      isRunning: threadState.isRunning,
-      setMessages: () => {},
-      convertMessage: (message) => message,
-      onNew: async () => {},
-    });
-
-    return html`
-      <${AssistantRuntimeProvider} runtime=${runtime}>
-        <${ThreadPrimitive.Root} className="assistant-thread">
-          <div className="assistant-thread-frame">
-            <${ConversationThreadHeader} />
-            <${ThreadPrimitive.Viewport} className="assistant-thread-viewport">
-              <div className="assistant-thread-inner">
-                ${threadState.messages.length === 0 && html`<div className="thread-empty-spacer"></div>`}
-                <${ThreadPrimitive.Messages}
-                  children=${({ message }) =>
-                    message?.role === "user"
-                      ? html`<${ConversationUserMessage} message=${message} />`
-                      : html`<${ConversationAssistantMessage} message=${message} meta=${meta} />`}
-                />
-              </div>
-            </${ThreadPrimitive.Viewport}>
-          </div>
-        </${ThreadPrimitive.Root}>
-      </${AssistantRuntimeProvider}>
-    `;
-  }
-
-  function PendingWorkspace({ submission, execution, meta }) {
-    if (!submission) {
+    if (executionMode !== "single_model") {
       return null;
     }
 
-    return html`<${ConversationThread} pendingSubmission=${{ ...submission, execution }} meta=${meta} />`;
+    return html`
+      <div className=${cx("status-card", isPending && "is-pending")}>
+        <div className="status-card-title">单模型测试已启用</div>
+        <div className="status-card-copy">${providerName} / ${modelName}</div>
+      </div>
+    `;
+  }
+
+  function PendingWorkspace({ submission, execution }) {
+    if (!submission) {
+      return null;
+    }
+    const failed = Boolean(submission.error_message);
+
+    return html`
+      <div className="workspace-feed">
+        <div className="message-card message-user">
+          <div className="message-meta">
+            <span>病例输入</span>
+            <span>·</span>
+            <span>${formatTimestamp(submission.timestamp)}</span>
+          </div>
+          <div className="message-body">${submission.case_summary}</div>
+        </div>
+
+        ${failed
+          ? html`
+              <div className="status-card">
+                <div className="status-card-title">执行失败</div>
+                <div className="status-card-copy">请求已到达后端，但当前流程没有生成可展示结果。</div>
+              </div>
+            `
+          : html`
+              <${ExecutionStatusCard}
+                executionMode=${execution?.mode}
+                providerName=${execution?.providerName || "未配置"}
+                modelName=${execution?.modelName || "未配置模型"}
+                isPending=${true}
+              />
+            `}
+
+        <div className="result-card pending-result-card">
+          <div className="result-head">
+            <div>
+              <div className="result-title">${failed ? "没有生成计划" : "正在生成结果"}</div>
+              <div className="result-summary">
+                ${failed ? "Planner/Executor 严格模式下失败，不会 fallback 到半成品输出。错误详情如下。" : "请求已提交，系统正在处理当前病例并准备回填临床结论。"}
+              </div>
+            </div>
+          </div>
+          ${failed
+            ? html`
+                <div className="info-panel" style=${{ marginTop: "18px" }}>
+                  <div className="panel-title">错误详情</div>
+                  <div className="info-list-item" style=${{ alignItems: "flex-start", color: "var(--text-subtle)", whiteSpace: "pre-wrap" }}>
+                    <span>${submission.error_message}</span>
+                  </div>
+                </div>
+              `
+            : null}
+        </div>
+      </div>
+    `;
   }
 
   function EmptyWorkspaceWordmark() {
@@ -1282,15 +1133,506 @@ const html = htm.bind(React.createElement);
     `;
   }
 
+  function PlanDisplayCopy({ step }) {
+    if (step.goal_zh || step.evidence_zh || step.human_check_zh) {
+      return html`
+        <span style=${{ display: "grid", gap: "6px", marginTop: "6px", color: "var(--text-subtle)", lineHeight: 1.65 }}>
+          ${step.goal_zh ? html`<span><strong style=${{ color: "var(--text-main)" }}>目标：</strong>${step.goal_zh}</span>` : null}
+          ${step.evidence_zh ? html`<span><strong style=${{ color: "var(--text-main)" }}>证据：</strong>${step.evidence_zh}</span>` : null}
+          ${step.human_check_zh ? html`<span><strong style=${{ color: "var(--text-main)" }}>核查：</strong>${step.human_check_zh}</span>` : null}
+        </span>
+      `;
+    }
+    return html`<span style=${{ display: "block", marginTop: "5px", color: "var(--text-subtle)", lineHeight: 1.65 }}>${step.desc_zh}</span>`;
+  }
+
+  function ExecutionDisplayCopy({ display }) {
+    if (display?.evidence_summary_zh || display?.human_check_zh) {
+      return html`
+        ${display?.conclusion_zh
+          ? html`
+              <span style=${{ display: "block", marginTop: "6px", color: "var(--text-main)", fontWeight: 700, lineHeight: 1.6 }}>
+                ${display.conclusion_zh}
+              </span>
+            `
+          : null}
+        <span style=${{ display: "grid", gap: "6px", marginTop: "6px", color: "var(--text-subtle)", lineHeight: 1.65 }}>
+          ${display.evidence_summary_zh ? html`<span><strong style=${{ color: "var(--text-main)" }}>证据：</strong>${display.evidence_summary_zh}</span>` : null}
+          ${display.human_check_zh ? html`<span><strong style=${{ color: "var(--text-main)" }}>核查：</strong>${display.human_check_zh}</span>` : null}
+        </span>
+      `;
+    }
+    return html`
+      ${display?.conclusion_zh
+        ? html`<span style=${{ display: "block", marginTop: "6px", color: "var(--text-main)", fontWeight: 700, lineHeight: 1.6 }}>${display.conclusion_zh}</span>`
+        : null}
+      <span style=${{ display: "block", marginTop: "5px", color: "var(--text-subtle)", lineHeight: 1.65 }}>
+        ${display?.desc_zh || "已完成当前步骤。"}
+      </span>
+    `;
+  }
+
+  function PlannerResultWorkspace({ session, meta }) {
+    const result = session.result;
+    const submission = session.submission;
+    const rows = result.plan_display_steps || [];
+    return html`
+      <div className="workspace-feed">
+        <div className="message-card message-user">
+          <div className="message-meta">
+            <span>Planner 输入</span>
+            <span>·</span>
+            <span>${formatTimestamp(session.timestamp)}</span>
+          </div>
+          <div className="message-body">${submission.case_summary}</div>
+        </div>
+
+        <div className="status-card">
+          <div className="status-card-title">@Planner</div>
+          <div className="status-card-copy">中文展示层已生成，英文执行计划保留在后端。</div>
+        </div>
+
+        <div className="result-card">
+          <div className="result-head">
+            <div>
+              <div className="result-title">${result.title}</div>
+              <div className="result-summary">${result.executive_summary}</div>
+            </div>
+            <div className="badge-row">
+              <span className="badge">@Planner</span>
+              <span className="badge">${label(meta, "department", result.department)}</span>
+              <span className="badge">计划</span>
+            </div>
+          </div>
+
+          <div className="info-panel">
+            <div className="panel-title">执行计划</div>
+            <div className="info-list">
+              ${rows.map(
+                (step, index) => html`
+                  <div key=${step.id || index} className="info-list-item">
+                    <span className="badge">${index + 1}</span>
+                    <span>
+                      <strong>${step.title_zh || `步骤 ${index + 1}`}</strong>
+                      <${PlanDisplayCopy} step=${step} />
+                      <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${step.tag_zh || "步骤"}</span>
+                    </span>
+                  </div>
+                `
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ExecutorResultWorkspace({ session, meta }) {
+    const result = session.result;
+    const submission = session.submission;
+    const records = result.execution_records || [];
+    return html`
+      <div className="workspace-feed">
+        <div className="message-card message-user">
+          <div className="message-meta">
+            <span>Executor 输入</span>
+            <span>·</span>
+            <span>${formatTimestamp(session.timestamp)}</span>
+          </div>
+          <div className="message-body">${submission.case_summary}</div>
+        </div>
+
+        <div className="status-card">
+          <div className="status-card-title">@Executor</div>
+          <div className="status-card-copy">已按计划完成执行，并为每一步生成证据记录。</div>
+        </div>
+
+        <div className="result-card">
+          <div className="result-head">
+            <div>
+              <div className="result-title">${result.title}</div>
+              <div className="result-summary">${result.executive_summary}</div>
+            </div>
+            <div className="badge-row">
+              <span className="badge">@Executor</span>
+              <span className="badge">${label(meta, "department", result.department)}</span>
+              <span className="badge">证据执行</span>
+            </div>
+          </div>
+
+          <div className="info-panel">
+            <div className="panel-title">执行记录</div>
+            <div className="info-list">
+              ${records.map(
+                (record, index) => html`
+                  <div key=${record.step_id || index} className="info-list-item">
+                    <span className="badge">${record.step_id || index + 1}</span>
+                    <span>
+                      <strong>${record.display?.title_zh || `步骤 ${index + 1}`}</strong>
+                      <${ExecutionDisplayCopy} display=${record.display} />
+                      <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${record.display?.tag_zh || "完成"}</span>
+                    </span>
+                  </div>
+                `
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ContextPanel({ submission, meta }) {
+    if (!submission) {
+      return null;
+    }
+    const assets = imageAssetsFromSubmission(submission);
+    return html`
+      <div className="result-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">当前病例上下文</div>
+            <div className="result-summary">后续的 @Planner 和 @Executor 都会沿用这里的原始文本与图像资料。输入 /clear 可开始新的上下文。</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">${label(meta, "department", submission.department)}</span>
+            <span className="badge">${label(meta, "output", submission.output_style)}</span>
+            <span className="badge">${label(meta, "urgency", submission.urgency)}</span>
+          </div>
+        </div>
+
+        <div className="info-panel">
+          <div className="panel-title">病例资料</div>
+          <div className="info-list">
+            ${submission.chief_complaint
+              ? html`
+                  <div className="info-list-item">
+                    <span className="badge">主诉</span>
+                    <span>${submission.chief_complaint}</span>
+                  </div>
+                `
+              : null}
+            <div className="info-list-item">
+              <span className="badge">摘要</span>
+              <span>${submission.case_summary || "未填写"}</span>
+            </div>
+            <div className="info-list-item">
+              <span className="badge">患者</span>
+              <span>${submission.patient_age || "年龄未填"} · ${label(meta, "sex", submission.patient_sex)}</span>
+            </div>
+            <div className="info-list-item">
+              <span className="badge">附件</span>
+              <span>${submission.uploaded_images?.length ? submission.uploaded_images.join("，") : "无影像附件"}${submission.uploaded_docs?.length ? `；${submission.uploaded_docs.join("，")}` : ""}</span>
+            </div>
+          </div>
+        </div>
+
+        ${assets.length
+          ? html`
+              <div className="info-panel" style=${{ marginTop: "18px" }}>
+                <div className="panel-title">原始图像</div>
+                <div style=${{ display: "grid", gap: "14px", gridTemplateColumns: assets.length > 1 ? "repeat(2, minmax(0, 1fr))" : "1fr" }}>
+                  ${assets.map(
+                    (asset, index) => html`
+                      <div key=${asset.name || index} style=${{ overflow: "hidden", borderRadius: "8px", border: "1px solid var(--line)", background: "#fff" }}>
+                        <img src=${imageSrcFromAsset(asset)} alt=${asset.name || `原始图像 ${index + 1}`} style=${{ display: "block", width: "100%", height: "auto" }} />
+                        <div style=${{ padding: "10px 12px", fontSize: "13px", color: "var(--text-subtle)" }}>${asset.name || `图像 ${index + 1}`}</div>
+                      </div>
+                    `
+                  )}
+                </div>
+              </div>
+            `
+          : null}
+      </div>
+    `;
+  }
+
+  function StepEvidenceFigure({ asset, record, index }) {
+    if (!asset || !hasGroundingEvidence(record)) {
+      return null;
+    }
+    const grounding = groundingPayload(record) || {};
+    const color = overlayColor(index);
+    const boundary = Array.isArray(grounding.boundary_points) ? grounding.boundary_points : [];
+    const bbox = Array.isArray(grounding.bbox) ? grounding.bbox : Array.isArray(grounding.coarse_bbox) ? grounding.coarse_bbox : null;
+    const point = Array.isArray(grounding.positive_point) ? grounding.positive_point : null;
+    const polygon = boundary.map((item) => `${Math.max(0, Math.min(1, Number(item?.[0] || 0))) * 100},${Math.max(0, Math.min(1, Number(item?.[1] || 0))) * 100}`).join(" ");
+    return html`
+      <div style=${{ marginTop: "14px", overflow: "hidden", borderRadius: "8px", border: "1px solid var(--line)", background: "#fff" }}>
+        <div style=${{ position: "relative" }}>
+          <img src=${imageSrcFromAsset(asset)} alt=${asset.name || `步骤 ${record.step_id || index + 1} 证据图`} style=${{ display: "block", width: "100%", height: "auto" }} />
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style=${{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+            ${polygon ? html`<polygon points=${polygon} fill=${`${color}22`} stroke=${color} strokeWidth="0.8"></polygon>` : null}
+            ${bbox
+              ? html`
+                  <rect
+                    x=${Math.max(0, Math.min(1, Number(bbox[0] || 0))) * 100}
+                    y=${Math.max(0, Math.min(1, Number(bbox[1] || 0))) * 100}
+                    width=${Math.max(0, Math.min(1, Number((bbox[2] || 0) - (bbox[0] || 0)))) * 100}
+                    height=${Math.max(0, Math.min(1, Number((bbox[3] || 0) - (bbox[1] || 0)))) * 100}
+                    fill="none"
+                    stroke=${color}
+                    strokeDasharray="2 1.5"
+                    strokeWidth="0.6"
+                  ></rect>
+                `
+              : null}
+            ${point ? html`<circle cx=${Math.max(0, Math.min(1, Number(point[0] || 0))) * 100} cy=${Math.max(0, Math.min(1, Number(point[1] || 0))) * 100} r="1.1" fill=${color}></circle>` : null}
+          </svg>
+        </div>
+        <div style=${{ padding: "10px 12px", fontSize: "13px", color: "var(--text-subtle)" }}>
+          本图仅显示步骤 ${record.step_id || index + 1} 的证据标注，不叠加其他步骤。
+        </div>
+      </div>
+    `;
+  }
+
+  function PlannerTurnCard({ turn, meta }) {
+    const result = turn.result;
+    const rows = result.plan_display_steps || [];
+    return html`
+      <div className="result-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">${result.title}</div>
+            <div className="result-summary">${result.executive_summary}</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">@Planner</span>
+            <span className="badge">${label(meta, "department", result.department)}</span>
+            <span className="badge">计划</span>
+          </div>
+        </div>
+        <div className="info-panel">
+          <div className="panel-title">执行计划</div>
+          <div className="info-list">
+            ${rows.map(
+              (step, index) => html`
+                <div key=${step.id || index} className="info-list-item">
+                  <span className="badge">${index + 1}</span>
+                  <span>
+                    <strong>${step.title_zh || `步骤 ${index + 1}`}</strong>
+                    <${PlanDisplayCopy} step=${step} />
+                    <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${step.tag_zh || "步骤"}</span>
+                  </span>
+                </div>
+              `
+            )}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function ExecutorTurnCard({ turn, meta, contextSubmission }) {
+    const result = turn.result;
+    const records = result.execution_records || [];
+    const assets = imageAssetsFromSubmission(contextSubmission || turn.submission);
+    const primaryAsset = assets[0] || null;
+    return html`
+      <div className="result-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">${result.title}</div>
+            <div className="result-summary">${result.executive_summary}</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">@Executor</span>
+            <span className="badge">${label(meta, "department", result.department)}</span>
+            <span className="badge">证据执行</span>
+          </div>
+        </div>
+        <div style=${{ display: "grid", gap: "18px", marginTop: "18px" }}>
+          ${records.map(
+            (record, index) => html`
+              <div key=${record.step_id || index} className="info-panel">
+                <div className="panel-title">步骤 ${record.step_id || index + 1}</div>
+                <div className="info-list-item" style=${{ alignItems: "flex-start" }}>
+                  <span className="badge">${record.step_id || index + 1}</span>
+                  <span>
+                    <strong>${record.display?.title_zh || `步骤 ${index + 1}`}</strong>
+                    <${ExecutionDisplayCopy} display=${record.display} />
+                    <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${record.display?.tag_zh || "完成"}</span>
+                  </span>
+                </div>
+                ${hasGroundingEvidence(record) && primaryAsset
+                  ? html`<${StepEvidenceFigure} asset=${primaryAsset} record=${record} index=${index} />`
+                  : hasGroundingEvidence(record)
+                    ? html`
+                        <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
+                          <span>此步骤已有 grounding 坐标，但当前上下文缺少原始图像，无法绘制证据图。</span>
+                        </div>
+                      `
+                  : html`
+                      <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
+                        <span>此步骤输出结构化证据，不单独绘制图像标注。</span>
+                      </div>
+                    `}
+              </div>
+            `
+          )}
+        </div>
+      </div>
+    `;
+  }
+
+  function GeneralTurnCard({ turn, meta }) {
+    const result = turn.result;
+    const rawModelText = result.raw_model_text || "";
+    const rawProviderRequest = result.raw_provider_request || "";
+    const rawProviderPayload = result.raw_provider_payload || "";
+    const showRawInspector =
+      result.execution_mode === "single_model" || Boolean(rawProviderRequest || rawProviderPayload || rawModelText);
+    return html`
+      <div className="result-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">${result.title}</div>
+            <div className="result-summary">${result.executive_summary}</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">${label(meta, "department", result.department)}</span>
+            <span className="badge">${label(meta, "output", result.output_style)}</span>
+            <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
+          </div>
+        </div>
+
+        <div className="result-section-grid">
+          <div className="markdown-panel" dangerouslySetInnerHTML=${{ __html: markdownToHtml(result.professional_answer) }}></div>
+          <div className="info-panel">
+            <div className="panel-title">下一步建议</div>
+            <div className="info-list">
+              ${result.next_steps.map(
+                (step, index) => html`
+                  <div key=${index} className="info-list-item">
+                    <${Icon} name="spark" size=${16} />
+                    <span>${step}</span>
+                  </div>
+                `
+              )}
+            </div>
+
+            <div className="panel-title" style=${{ marginTop: "18px" }}>安全提醒</div>
+            <div className="info-list-item">
+              <${Icon} name="history" size=${16} />
+              <span>${result.safety_note}</span>
+            </div>
+          </div>
+        </div>
+
+        ${showRawInspector &&
+        html`
+          <details className="result-raw-details">
+            <summary>查看原始模型响应（用于核查）</summary>
+            <div className="result-raw-body">
+              <div className="result-raw-label">请求 JSON</div>
+              <pre className="result-raw-block">${rawProviderRequest || "当前记录未保存请求 JSON。请提交新请求后再核查。"}</pre>
+
+              <div className="result-raw-label">API 原始 JSON</div>
+              <pre className="result-raw-block">${rawProviderPayload || "当前记录未保存 API 原始 JSON。请提交新请求后再核查。"}</pre>
+
+              <div className="result-raw-label">模型文本</div>
+              <pre className="result-raw-block">${rawModelText || "当前记录未保存模型原始文本。请提交新请求后再核查。"}</pre>
+            </div>
+          </details>
+        `}
+
+        <${DataTableCard}
+          title="编码建议"
+          rows=${result.coding_table}
+          columns=${[
+            { key: "编码体系", label: "编码体系" },
+            { key: "建议编码", label: "建议编码" },
+            { key: "临床用途", label: "临床用途" },
+          ]}
+        />
+
+        <${DataTableCard}
+          title="费用评估"
+          rows=${result.cost_table}
+          columns=${[
+            { key: "项目", label: "项目" },
+            { key: "估算", label: "估算" },
+          ]}
+        />
+
+        <${DataTableCard}
+          title="参考依据"
+          rows=${result.references}
+          columns=${[
+            { key: "type", label: "来源" },
+            { key: "title", label: "标题" },
+            { key: "region", label: "区域" },
+          ]}
+        />
+      </div>
+    `;
+  }
+
+  function TurnWorkspace({ turn, meta, contextSubmission }) {
+    const result = turn.result;
+    const submission = turn.submission;
+    return html`
+      <div>
+        <div className="message-card message-user">
+          <div className="message-meta">
+            <span>当前输入</span>
+            <span>·</span>
+            <span>${formatTimestamp(turn.timestamp)}</span>
+          </div>
+          <div className="message-body">${turn.user_input || submission.case_summary}</div>
+        </div>
+
+        <${ExecutionStatusCard}
+          executionMode=${result.execution_mode}
+          providerName=${result.serving_provider}
+          modelName=${result.serving_model}
+        />
+
+        ${result.execution_mode === "planner"
+          ? html`<${PlannerTurnCard} turn=${turn} meta=${meta} />`
+          : result.execution_mode === "executor"
+            ? html`<${ExecutorTurnCard} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`
+            : html`<${GeneralTurnCard} turn=${turn} meta=${meta} />`}
+      </div>
+    `;
+  }
+
   function ResultWorkspace({ session, meta }) {
     if (!session) {
       return null;
     }
 
-    return html`<${ConversationThread} session=${session} meta=${meta} />`;
+    if (!session.result || !session.submission) {
+      return html`<${SessionSummaryOnly} session=${session} meta=${meta} />`;
+    }
+
+    const contextSubmission = session.context_submission || session.submission;
+    const turns = buildTurnList(session);
+    return html`
+      <div className="workspace-feed">
+        <${ContextPanel} submission=${contextSubmission} meta=${meta} />
+        ${turns.map((turn, index) => html`<${TurnWorkspace} key=${`${turn.timestamp}-${index}`} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`)}
+      </div>
+    `;
+  }
+
+  function formatTableValue(value) {
+    if (Array.isArray(value)) {
+      return value.join(", ");
+    }
+    if (value === null || value === undefined || value === "") {
+      return "—";
+    }
+    if (typeof value === "object") {
+      return JSON.stringify(value);
+    }
+    return value;
   }
 
   function DataTableCard({ title, columns, rows }) {
+    const safeRows = rows || [];
     return html`
       <div className="table-card">
         <div className="table-head">
@@ -1303,10 +1645,10 @@ const html = htm.bind(React.createElement);
             </tr>
           </thead>
           <tbody>
-            ${rows.map(
+            ${safeRows.map(
               (row, index) => html`
                 <tr key=${index}>
-                  ${columns.map((column) => html`<td key=${column.key}>${row[column.key]}</td>`)}
+                  ${columns.map((column) => html`<td key=${column.key}>${formatTableValue(row[column.key])}</td>`)}
                 </tr>
               `
             )}
@@ -1378,6 +1720,7 @@ const html = htm.bind(React.createElement);
     settings,
     composer,
     setComposer,
+    currentSession,
     onToggleSingleModelTest,
     onSubmit,
     onReset,
@@ -1393,17 +1736,19 @@ const html = htm.bind(React.createElement);
     const slashChildItemRefs = useRef([]);
     const [slashMenu, setSlashMenu] = useState({
       open: false,
+      trigger: "/",
       path: [],
       activeIndex: 0,
       query: "",
-      position: { left: 20, bottom: 156 },
+      position: { left: 20, top: 156, maxHeight: 360, placement: "down" },
     });
     const slashRootItems = useMemo(() => {
-      const filtered = filterSlashItems(SLASH_MENU_TREE, slashMenu.path.length ? "" : slashMenu.query);
-      return filtered.length || slashMenu.path.length ? filtered : SLASH_MENU_TREE;
-    }, [slashMenu.path.length, slashMenu.query]);
+      const rootItems = commandTreeForTrigger(slashMenu.trigger);
+      const filtered = filterSlashItems(rootItems, slashMenu.path.length ? "" : slashMenu.query);
+      return filtered.length || slashMenu.path.length ? filtered : rootItems;
+    }, [slashMenu.path.length, slashMenu.query, slashMenu.trigger]);
     const activeRootId = slashMenu.path[0] || null;
-    const activeRootItem = useMemo(() => SLASH_MENU_TREE.find((item) => item.id === activeRootId) || null, [activeRootId]);
+    const activeRootItem = useMemo(() => commandTreeForTrigger(slashMenu.trigger).find((item) => item.id === activeRootId) || null, [activeRootId, slashMenu.trigger]);
     const slashChildItems = useMemo(() => activeRootItem?.children || [], [activeRootItem]);
 
     useEffect(() => {
@@ -1518,8 +1863,9 @@ const html = htm.bind(React.createElement);
         return;
       }
 
-      const nextPath = pathOverride || slashMenu.path;
-      const visibleItems = nextPath.length ? getSlashItems(nextPath) : filterSlashItems(SLASH_MENU_TREE, context.query);
+      const nextPath = context.trigger === slashMenu.trigger ? pathOverride || slashMenu.path : [];
+      const rootItems = commandTreeForTrigger(context.trigger);
+      const visibleItems = nextPath.length ? getSlashItems(nextPath, context.trigger) : filterSlashItems(rootItems, context.query);
       if (!visibleItems.length) {
         closeSlashMenu();
         return;
@@ -1529,6 +1875,7 @@ const html = htm.bind(React.createElement);
       setSlashMenu((current) => ({
         ...current,
         open: true,
+        trigger: context.trigger,
         path: nextPath,
         activeIndex: Math.min(current.activeIndex, visibleItems.length - 1),
         query: context.query,
@@ -1603,7 +1950,7 @@ const html = htm.bind(React.createElement);
       range.setEnd(context.node, context.endOffset);
       range.deleteContents();
 
-      const token = buildSlashToken(item, slashMenu.path);
+      const token = buildSlashToken(item, slashMenu.path, slashMenu.trigger);
       const fragment = document.createDocumentFragment();
       const tokenNode = createEditorTokenElement(token);
       const spacer = document.createTextNode(" ");
@@ -1725,6 +2072,13 @@ const html = htm.bind(React.createElement);
     return html`
       <div className="composer-shell">
         <div className="composer-body">
+          ${currentSession &&
+          html`
+            <div className="status-card" style=${{ marginBottom: "12px" }}>
+              <div className="status-card-title">当前上下文已启用</div>
+              <div className="status-card-copy">${currentSession.title || "当前病例"} · 输入 /clear 可开始新的会话</div>
+            </div>
+          `}
           <div className="composer-textarea-wrap" ref=${editorWrapRef}>
             <div
               ref=${editorRef}
@@ -1748,8 +2102,8 @@ const html = htm.bind(React.createElement);
             ${slashMenu.open &&
             slashRootItems.length > 0 &&
             html`
-              <div className="slash-menu-stack" style=${{ left: `${slashMenu.position.left}px`, bottom: `${slashMenu.position.bottom}px` }}>
-                <div className="slash-menu-popup">
+              <div className="slash-menu-stack" style=${{ left: `${slashMenu.position.left}px`, top: `${slashMenu.position.top}px` }}>
+                <div className="slash-menu-popup" style=${{ maxHeight: `${slashMenu.position.maxHeight}px` }}>
                   <div className="slash-menu-list">
                     ${slashRootItems.map(
                       (item, index) => html`
@@ -1774,10 +2128,14 @@ const html = htm.bind(React.createElement);
                               setSlashMenu((current) => ({ ...current, activeIndex: index }));
                             }
                           }}
-                          onClick=${() => setSlashMenu((current) => ({ ...current, path: [item.id], activeIndex: 0, query: "" }))}
+                          onClick=${() =>
+                            item.children
+                              ? setSlashMenu((current) => ({ ...current, path: [item.id], activeIndex: 0, query: "" }))
+                              : insertSlashToken(item)}
                         >
                           <div className="slash-menu-copy">
                             <span className="slash-menu-label">${item.label}</span>
+                            ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
                           </div>
                           ${item.children && html`<span className="slash-menu-arrow">›</span>`}
                         </button>
@@ -1786,10 +2144,10 @@ const html = htm.bind(React.createElement);
                   </div>
                 </div>
 
-                ${slashMenu.path.length &&
+                ${Boolean(slashMenu.path.length) &&
                 slashChildItems.length > 0 &&
                 html`
-                  <div className="slash-menu-popup slash-submenu-popup">
+                  <div className="slash-menu-popup slash-submenu-popup" style=${{ maxHeight: `${slashMenu.position.maxHeight}px` }}>
                     <div className="slash-menu-list">
                       ${slashChildItems.map(
                         (item, index) => html`
@@ -1807,6 +2165,7 @@ const html = htm.bind(React.createElement);
                           >
                             <div className="slash-menu-copy">
                               <span className="slash-menu-label">${item.label}</span>
+                              ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
                             </div>
                           </button>
                         `
@@ -2833,21 +3192,32 @@ const html = htm.bind(React.createElement);
     }
 
     async function submitCase() {
-      if (!composer.case_summary.trim()) {
+      const trimmedInput = composer.case_summary.trim();
+      if (trimmedInput === "/clear") {
+        setCurrentSession(null);
+        setPendingSubmission(null);
+        resetComposer();
+        setActiveView("workspace");
+        pushNotice("已清空当前上下文。");
+        return;
+      }
+
+      if (!trimmedInput) {
         pushNotice("请先输入病例摘要。", "error");
         return;
       }
-      const submittedComposer = {
-        ...composer,
-        case_blocks: [...(composer.case_blocks || [])],
-        image_files: [...(composer.image_files || [])],
-        doc_files: [...(composer.doc_files || [])],
-      };
       setIsSubmitting(true);
       try {
-        const execution = composer.single_model_test
-          ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
-          : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
+        const plannerRequested = isPlannerInvocation(composer.case_summary);
+        const executorRequested = isExecutorInvocation(composer.case_summary);
+        const imageAssets = plannerRequested || executorRequested ? await serializeImageAssets(composer.image_files) : [];
+        const execution = executorRequested
+          ? { mode: "executor", providerName: "configured", modelName: "configured", roleName: "Executor" }
+          : plannerRequested
+            ? { mode: "planner", providerName: "configured", modelName: "configured", roleName: "Planner" }
+          : composer.single_model_test
+            ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
+            : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
         const payload = {
           case_summary: composer.case_summary,
           chief_complaint: composer.chief_complaint,
@@ -2858,21 +3228,17 @@ const html = htm.bind(React.createElement);
           output_style: composer.output_style,
           urgency: composer.urgency,
           show_process: composer.show_process,
-          single_model_test: composer.single_model_test,
+          single_model_test: plannerRequested || executorRequested ? false : composer.single_model_test,
           uploaded_images: composer.image_files.map((file) => file.name),
           uploaded_docs: composer.doc_files.map((file) => file.name),
+          uploaded_image_assets: imageAssets,
+          context_session_id: currentSession?.session_id || "",
         };
-        setCurrentSession(null);
         setPendingSubmission({
           timestamp: new Date().toLocaleString("zh-CN", { hour12: false }),
           case_summary: composer.case_summary,
           execution,
         });
-        setComposer((current) => ({
-          ...makeDefaultComposer(meta, settings),
-          input_expanded: current.input_expanded,
-          single_model_test: current.single_model_test,
-        }));
         setActiveView("workspace");
         const data = await fetchJson("/api/diagnose", {
           method: "POST",
@@ -2881,15 +3247,27 @@ const html = htm.bind(React.createElement);
         setCurrentSession(data.session);
         setPendingSubmission(null);
         applySessionList(data.sessions || []);
-        setActiveView("workspace");
-        pushNotice("会诊已生成。");
-      } catch (error) {
-        setPendingSubmission(null);
         setComposer((current) => ({
-          ...submittedComposer,
+          ...makeDefaultComposer(meta, settings),
           input_expanded: current.input_expanded,
           single_model_test: current.single_model_test,
         }));
+        setActiveView("workspace");
+        pushNotice("会诊已生成。");
+      } catch (error) {
+        setPendingSubmission((current) =>
+          current
+            ? {
+                ...current,
+                error_message: error.message,
+              }
+            : {
+                timestamp: new Date().toLocaleString("zh-CN", { hour12: false }),
+                case_summary: composer.case_summary,
+                execution: { mode: "error", providerName: "", modelName: "", roleName: "" },
+                error_message: error.message,
+              }
+        );
         if (!handleAuthError(error)) {
           pushNotice(error.message, "error");
         }
@@ -3194,7 +3572,14 @@ const html = htm.bind(React.createElement);
                       />
                     `
                   : pendingSubmission
-                    ? html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} meta=${meta} />`
+                    ? currentSession
+                      ? html`
+                          <div className="workspace-feed">
+                            <${ResultWorkspace} session=${currentSession} meta=${meta} />
+                            <${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />
+                          </div>
+                        `
+                      : html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />`
                     : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
               </div>
 
@@ -3205,6 +3590,7 @@ const html = htm.bind(React.createElement);
                   settings=${settings}
                   composer=${composer}
                   setComposer=${setComposer}
+                  currentSession=${currentSession}
                   onToggleSingleModelTest=${toggleSingleModelTest}
                   onSubmit=${submitCase}
                   onReset=${resetComposer}
@@ -3223,4 +3609,5 @@ const html = htm.bind(React.createElement);
     `;
   }
 
-createRoot(document.getElementById("app")).render(html`<${App} />`);
+  ReactDOM.createRoot(document.getElementById("app")).render(html`<${App} />`);
+})();
