@@ -9,10 +9,16 @@ from typing import Any, Callable
 
 import cv2
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 
-JsonImageRequester = Callable[[str, str, int, str], dict[str, Any]]
+JsonImageRequester = Callable[[list[dict[str, Any]] | list[str], str, int, str], dict[str, Any]]
+DEFAULT_MASK_SIZE = 64
+REQUIRED_BOUNDARY_POINT_COUNT = 32
+ANALYSIS_MAX_LONG_EDGE = 1536
+PNG_VIEW_PIXEL_LIMIT = 1_200_000
+JPEG_VIEW_QUALITY = 92
+FOCUS_PANEL_EDGE = 448
 
 
 @dataclass
@@ -22,17 +28,18 @@ class HarnessImage:
     media_type: str
     width: int
     height: int
+    original_width: int = 0
+    original_height: int = 0
+    analysis_scale: float = 1.0
 
 
 @dataclass
-class CropContext:
+class HarnessView:
+    name: str
+    label: str
     data_url: str
-    crop_box_px: list[int]
-    crop_box_norm: list[float]
-    width: int
-    height: int
-    parent_overlay: bool = False
-    label: str = ""
+    bounds: list[float] | None = None
+    selectable: bool = True
 
 
 def clamp01(value: object) -> float:
@@ -59,7 +66,87 @@ def normalize_bbox(value: object) -> list[float]:
 def normalize_boundary_points(value: object) -> list[list[float]]:
     if not isinstance(value, list) or len(value) < 3:
         raise ValueError("Grounding boundary must contain at least 3 points.")
-    return [normalize_point(item) for item in value[:48]]
+    return [normalize_point(item) for item in value]
+
+
+def map_point_from_view(point: list[float], view: HarnessView) -> list[float]:
+    bounds = view.bounds or [0.0, 0.0, 1.0, 1.0]
+    left, top, right, bottom = [float(item) for item in bounds]
+    width = max(1e-6, right - left)
+    height = max(1e-6, bottom - top)
+    return [
+        round(clamp01(left + float(point[0]) * width), 6),
+        round(clamp01(top + float(point[1]) * height), 6),
+    ]
+
+
+def map_points_from_view(points: list[list[float]], view: HarnessView) -> list[list[float]]:
+    return [map_point_from_view(point, view) for point in points]
+
+
+def normalize_mask_size(value: object) -> list[int]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("Grounding mask_size must have length 2.")
+    width = int(value[0])
+    height = int(value[1])
+    if width < 24 or height < 24 or width > 128 or height > 128:
+        raise ValueError("Grounding mask_size must be between 24 and 128.")
+    return [width, height]
+
+
+def normalize_mask_spans(value: object, *, width: int, height: int) -> list[list[Any]]:
+    if not isinstance(value, list):
+        raise ValueError("Grounding mask_spans must be a list.")
+    rows: list[list[Any]] = []
+    previous_row = -1
+    for entry in value:
+        if isinstance(entry, dict):
+            row_value = entry.get("row")
+            runs_value = entry.get("runs", entry.get("segments", entry.get("spans")))
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            row_value, runs_value = entry
+        else:
+            raise ValueError("Each mask_spans entry must be [row, runs] or an object with row/runs.")
+        row = int(row_value)
+        if row < 0 or row >= height:
+            raise ValueError("mask_spans row is out of range.")
+        if row <= previous_row:
+            raise ValueError("mask_spans rows must be strictly increasing.")
+        previous_row = row
+        if not isinstance(runs_value, list):
+            raise ValueError("mask_spans runs must be a list.")
+        normalized_runs: list[list[int]] = []
+        for run in runs_value:
+            if not isinstance(run, (list, tuple)) or len(run) != 2:
+                raise ValueError("Each mask_spans run must have length 2.")
+            left = max(0, min(width - 1, int(run[0])))
+            right = max(0, min(width - 1, int(run[1])))
+            start, end = sorted([left, right])
+            if normalized_runs and start <= normalized_runs[-1][1] + 1:
+                normalized_runs[-1][1] = max(normalized_runs[-1][1], end)
+            else:
+                normalized_runs.append([start, end])
+        if normalized_runs:
+            rows.append([row, normalized_runs])
+    if not rows:
+        raise ValueError("mask_spans must contain at least one foreground row.")
+    return rows
+
+
+def canonicalize_boundary_points(points: list[list[float]]) -> list[list[float]]:
+    if len(points) < 3:
+        raise ValueError("Cannot canonicalize fewer than 3 boundary points.")
+    ordered = [[float(point[0]), float(point[1])] for point in points]
+    if _has_self_intersection(ordered):
+        centroid = polygon_centroid(ordered)
+        repaired = sorted(ordered, key=lambda point: math.atan2(point[1] - centroid[1], point[0] - centroid[0]))
+        if not _has_self_intersection(repaired):
+            ordered = repaired
+    if polygon_signed_area(ordered) >= 0:
+        ordered = list(reversed(ordered))
+    top_index = min(range(len(ordered)), key=lambda index: (ordered[index][1], ordered[index][0]))
+    rotated = ordered[top_index:] + ordered[:top_index]
+    return [[round(point[0], 6), round(point[1], 6)] for point in rotated]
 
 
 def bbox_from_points(points: list[list[float]]) -> list[float]:
@@ -86,6 +173,67 @@ def polygon_perimeter(points: list[list[float]]) -> float:
     return total
 
 
+def resample_boundary_points(points: list[list[float]], *, n_points: int = REQUIRED_BOUNDARY_POINT_COUNT) -> list[list[float]]:
+    if len(points) < 3:
+        raise ValueError("Cannot resample fewer than 3 boundary points.")
+    perimeter = polygon_perimeter(points)
+    if perimeter <= 1e-9:
+        raise ValueError("Cannot resample zero-perimeter boundary.")
+    segments: list[tuple[list[float], list[float], float]] = []
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        length = math.dist(point, next_point)
+        if length > 1e-12:
+            segments.append((point, next_point, length))
+    if not segments:
+        raise ValueError("Cannot resample boundary without non-zero edges.")
+    samples: list[list[float]] = []
+    segment_index = 0
+    traversed = 0.0
+    for sample_index in range(n_points):
+        target = perimeter * sample_index / n_points
+        while segment_index < len(segments) - 1 and traversed + segments[segment_index][2] < target:
+            traversed += segments[segment_index][2]
+            segment_index += 1
+        start, end, length = segments[segment_index]
+        ratio = max(0.0, min(1.0, (target - traversed) / length))
+        samples.append(
+            [
+                round(clamp01(start[0] + (end[0] - start[0]) * ratio), 6),
+                round(clamp01(start[1] + (end[1] - start[1]) * ratio), 6),
+            ]
+        )
+    return samples
+
+
+def polygon_centroid(points: list[list[float]]) -> list[float]:
+    if len(points) < 3:
+        raise ValueError("Cannot compute centroid from fewer than 3 points.")
+    signed_area = 0.0
+    cx = 0.0
+    cy = 0.0
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        cross = point[0] * next_point[1] - next_point[0] * point[1]
+        signed_area += cross
+        cx += (point[0] + next_point[0]) * cross
+        cy += (point[1] + next_point[1]) * cross
+    if abs(signed_area) < 1e-8:
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return [sum(xs) / len(xs), sum(ys) / len(ys)]
+    factor = 1.0 / (3.0 * signed_area)
+    return [cx * factor, cy * factor]
+
+
+def polygon_signed_area(points: list[list[float]]) -> float:
+    total = 0.0
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        total += point[0] * next_point[1] - next_point[0] * point[1]
+    return total * 0.5
+
+
 def parent_grounding(parent_output: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(parent_output, dict):
         return {}
@@ -104,6 +252,18 @@ def area_ratio(bbox: list[float]) -> float:
     return max(0.0, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
 
 
+def bbox_iou(first: list[float], second: list[float]) -> float:
+    left = max(first[0], second[0])
+    top = max(first[1], second[1])
+    right = min(first[2], second[2])
+    bottom = min(first[3], second[3])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    union = area_ratio(first) + area_ratio(second) - intersection
+    if union <= 0.0:
+        return 0.0
+    return float(intersection / union)
+
+
 def _decode_data_url(data_url: str) -> tuple[str, bytes]:
     if not data_url.startswith("data:image/") or "," not in data_url:
         raise ValueError("Grounding harness requires a data:image data URL.")
@@ -116,20 +276,247 @@ def prepare_harness_image(image_payload: dict[str, str]) -> HarnessImage:
     media_type, raw = _decode_data_url(str(image_payload.get("data_url", "")).strip())
     image = Image.open(io.BytesIO(raw))
     image = ImageOps.exif_transpose(image).convert("RGB")
-    data_url = _image_to_data_url(image)
+    original_width, original_height = image.size
+    image = _resize_for_analysis(image)
+    view_media_type = _select_view_media_type(image, media_type)
+    data_url = _image_to_data_url(image, media_type=view_media_type)
     return HarnessImage(
         image=image,
         data_url=data_url,
-        media_type=media_type,
+        media_type=view_media_type,
         width=image.width,
         height=image.height,
+        original_width=original_width,
+        original_height=original_height,
+        analysis_scale=round(image.width / max(1, original_width), 6),
     )
 
 
-def _image_to_data_url(image: Image.Image) -> str:
+def _resize_for_analysis(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    long_edge = max(width, height)
+    if long_edge <= ANALYSIS_MAX_LONG_EDGE:
+        return image
+    return ImageOps.contain(image, (ANALYSIS_MAX_LONG_EDGE, ANALYSIS_MAX_LONG_EDGE), method=Image.Resampling.LANCZOS)
+
+
+def _select_view_media_type(image: Image.Image, source_media_type: str) -> str:
+    if source_media_type.lower() in {"image/jpeg", "image/jpg"}:
+        return "image/jpeg"
+    if image.width * image.height > PNG_VIEW_PIXEL_LIMIT:
+        return "image/jpeg"
+    return "image/png"
+
+
+def _image_to_data_url(image: Image.Image, *, media_type: str = "image/png") -> str:
     buffer = io.BytesIO()
-    image.convert("RGB").save(buffer, format="JPEG", quality=88, optimize=True)
-    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    if media_type == "image/jpeg":
+        image.convert("RGB").save(buffer, format="JPEG", quality=JPEG_VIEW_QUALITY, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    image.convert("RGB").save(buffer, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _clip_bounds(bounds: list[float]) -> list[float]:
+    left, top, right, bottom = [clamp01(item) for item in bounds]
+    left, right = sorted([left, right])
+    top, bottom = sorted([top, bottom])
+    if right - left < 0.02:
+        center_x = (left + right) * 0.5
+        left = max(0.0, center_x - 0.01)
+        right = min(1.0, center_x + 0.01)
+    if bottom - top < 0.02:
+        center_y = (top + bottom) * 0.5
+        top = max(0.0, center_y - 0.01)
+        bottom = min(1.0, center_y + 0.01)
+    return [round(left, 6), round(top, 6), round(right, 6), round(bottom, 6)]
+
+
+def _bounds_to_pixel_box(image: Image.Image, bounds: list[float]) -> tuple[int, int, int, int]:
+    clipped = _clip_bounds(bounds)
+    left = int(round(clipped[0] * max(1, image.width - 1)))
+    top = int(round(clipped[1] * max(1, image.height - 1)))
+    right = int(round(clipped[2] * max(1, image.width - 1)))
+    bottom = int(round(clipped[3] * max(1, image.height - 1)))
+    right = max(right, left + 1)
+    bottom = max(bottom, top + 1)
+    return left, top, right, bottom
+
+
+def _crop_image(image: Image.Image, bounds: list[float]) -> Image.Image:
+    left, top, right, bottom = _bounds_to_pixel_box(image, bounds)
+    return image.crop((left, top, right, bottom))
+
+
+def _panel_label(image: Image.Image, label: str) -> Image.Image:
+    canvas = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(canvas)
+    w, h = canvas.size
+    band_height = min(28, max(22, h // 18))
+    draw.rectangle([0, 0, w, band_height], fill=(255, 255, 255))
+    draw.text((8, max(2, band_height // 5)), label[:120], fill=(0, 0, 0))
+    return canvas
+
+
+def _resize_panel(image: Image.Image, *, width: int = FOCUS_PANEL_EDGE, height: int = FOCUS_PANEL_EDGE) -> Image.Image:
+    return ImageOps.contain(image.convert("RGB"), (width, height))
+
+
+def _draw_focus_sheet(image: Image.Image, focus_windows: list[tuple[str, list[float]]]) -> Image.Image:
+    cell_width = FOCUS_PANEL_EDGE
+    cell_height = FOCUS_PANEL_EDGE + 34
+    columns = 2
+    rows = max(1, math.ceil(len(focus_windows) / columns))
+    canvas = Image.new("RGB", (columns * cell_width, rows * cell_height), (18, 18, 18))
+    draw = ImageDraw.Draw(canvas)
+    for index, (name, bounds) in enumerate(focus_windows, start=1):
+        row = (index - 1) // columns
+        column = (index - 1) % columns
+        left = column * cell_width
+        top = row * cell_height
+        label = f"focus-{index}: {name} {_bounds_text(name, bounds, precision=4)}"
+        draw.rectangle([left, top, left + cell_width - 1, top + 33], fill=(255, 255, 255))
+        draw.text((left + 8, top + 8), label[:96], fill=(0, 0, 0))
+        crop = _resize_panel(_crop_image(image, bounds), width=cell_width, height=FOCUS_PANEL_EDGE)
+        paste_left = left + (cell_width - crop.width) // 2
+        paste_top = top + 34 + (FOCUS_PANEL_EDGE - crop.height) // 2
+        canvas.paste(crop, (paste_left, paste_top))
+        draw.rectangle([left, top + 34, left + cell_width - 1, top + cell_height - 1], outline=(242, 185, 36), width=2)
+    return canvas
+
+
+def _is_effectively_grayscale(image: Image.Image) -> bool:
+    array = np.asarray(image.convert("RGB"), dtype=np.int16)
+    channel_delta = (
+        np.abs(array[:, :, 0] - array[:, :, 1]).mean()
+        + np.abs(array[:, :, 1] - array[:, :, 2]).mean()
+        + np.abs(array[:, :, 0] - array[:, :, 2]).mean()
+    ) / 3.0
+    return float(channel_delta) < 2.0
+
+
+def _bounds_text(name: str, bounds: list[float], *, precision: int = 4) -> str:
+    left, top, right, bottom = bounds
+    return f"{name} x={left:.{precision}f}-{right:.{precision}f} y={top:.{precision}f}-{bottom:.{precision}f}"
+
+
+def _make_focus_windows(parent_bbox: list[float] | None, relationship: str) -> list[tuple[str, list[float]]]:
+    windows: list[tuple[str, list[float]]] = []
+    if parent_bbox:
+        relation = _normalize_relation_name(relationship)
+        if relation in {"deep_to_parent", "posterior_to_parent"}:
+            windows.append(
+                (
+                    "parent-relative",
+                    _clip_bounds(
+                        [
+                            parent_bbox[0] - 0.18,
+                            parent_bbox[1] - 0.10,
+                            parent_bbox[2] + 0.18,
+                            parent_bbox[3] + 0.42,
+                        ]
+                    ),
+                )
+            )
+            windows.append(
+                (
+                    "parent-context",
+                    _clip_bounds(
+                        [
+                            parent_bbox[0] - 0.26,
+                            parent_bbox[1] - 0.18,
+                            parent_bbox[2] + 0.26,
+                            parent_bbox[3] + 0.46,
+                        ]
+                    ),
+                )
+            )
+        elif relation in {"inside_parent", "within_parent", "part_of_parent"}:
+            windows.append(
+                (
+                    "parent-focused",
+                    _clip_bounds(
+                        [
+                            parent_bbox[0] - 0.08,
+                            parent_bbox[1] - 0.08,
+                            parent_bbox[2] + 0.08,
+                            parent_bbox[3] + 0.08,
+                        ]
+                    ),
+                )
+            )
+            windows.append(
+                (
+                    "parent-context",
+                    _clip_bounds(
+                        [
+                            parent_bbox[0] - 0.16,
+                            parent_bbox[1] - 0.16,
+                            parent_bbox[2] + 0.16,
+                            parent_bbox[3] + 0.16,
+                        ]
+                    ),
+                )
+            )
+        else:
+            windows.append(
+                (
+                    "parent-context",
+                    _clip_bounds(
+                        [
+                            parent_bbox[0] - 0.18,
+                            parent_bbox[1] - 0.18,
+                            parent_bbox[2] + 0.18,
+                            parent_bbox[3] + 0.18,
+                        ]
+                    ),
+                )
+            )
+    windows.extend(
+        [
+            ("upper-left", [0.0, 0.0, 0.62, 0.62]),
+            ("upper-right", [0.38, 0.0, 1.0, 0.62]),
+            ("lower-left", [0.0, 0.38, 0.62, 1.0]),
+            ("lower-right", [0.38, 0.38, 1.0, 1.0]),
+        ]
+    )
+    deduped: list[tuple[str, list[float]]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for name, bounds in windows:
+        clipped = _clip_bounds(bounds)
+        key = tuple(clipped)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((name, clipped))
+    return deduped[:4]
+
+
+def _build_grounding_views(
+    context: HarnessImage,
+    *,
+    parent_bbox: list[float] | None,
+    relationship: str,
+) -> list[HarnessView]:
+    del parent_bbox, relationship
+    if _is_effectively_grayscale(context.image):
+        guided_image = _draw_grid(context.image, label="full-image normalized coordinate frame")
+        return [
+            HarnessView(
+                name="coordinate-full",
+                label="View 1: full grayscale image with coordinate tick marks; coordinates are normalized to this whole image",
+                data_url=_image_to_data_url(guided_image, media_type=context.media_type),
+                bounds=None,
+            )
+        ]
+    return [
+        HarnessView(
+            name="original-full",
+            label="View 1: original full image; coordinates are normalized to this whole image",
+            data_url=context.data_url,
+            bounds=None,
+        )
+    ]
 
 
 def _draw_grid(image: Image.Image, *, label: str) -> Image.Image:
@@ -159,409 +546,201 @@ def _draw_grid(image: Image.Image, *, label: str) -> Image.Image:
     return canvas
 
 
-def _points_to_px(points: list[list[float]], width: int, height: int) -> list[tuple[int, int]]:
-    return [
-        (
-            int(round(clamp01(point[0]) * max(1, width - 1))),
-            int(round(clamp01(point[1]) * max(1, height - 1))),
-        )
-        for point in points
-    ]
-
-
-def _bbox_to_px(bbox: list[float], width: int, height: int) -> list[int]:
-    return [
-        int(round(bbox[0] * max(1, width - 1))),
-        int(round(bbox[1] * max(1, height - 1))),
-        int(round(bbox[2] * max(1, width - 1))),
-        int(round(bbox[3] * max(1, height - 1))),
-    ]
-
-
-def _bbox_from_px(box: list[int], width: int, height: int) -> list[float]:
-    return [
-        round(box[0] / max(1, width - 1), 6),
-        round(box[1] / max(1, height - 1), 6),
-        round(box[2] / max(1, width - 1), 6),
-        round(box[3] / max(1, height - 1), 6),
-    ]
-
-
-def _sort_polygon_points(points: list[list[float]]) -> list[list[float]]:
-    if len(points) < 3:
-        return points
-    cx = sum(point[0] for point in points) / len(points)
-    cy = sum(point[1] for point in points) / len(points)
-    ranked = sorted(points, key=lambda point: math.atan2(point[1] - cy, point[0] - cx))
-    return [[round(point[0], 6), round(point[1], 6)] for point in ranked]
-
-
-def _point_inside_polygon(point: list[float], polygon: list[list[float]]) -> bool:
-    x, y = point
-    inside = False
-    j = len(polygon) - 1
-    for i in range(len(polygon)):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        intersects = (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / max(1e-9, yj - yi) + xi
-        if intersects:
-            inside = not inside
-        j = i
-    return inside
-
-
-def _polygon_centroid(points: list[list[float]]) -> list[float]:
-    if not points:
-        raise ValueError("Cannot compute centroid from empty polygon.")
-    signed_area = 0.0
-    cx = 0.0
-    cy = 0.0
-    for index, point in enumerate(points):
-        next_point = points[(index + 1) % len(points)]
-        cross = point[0] * next_point[1] - next_point[0] * point[1]
-        signed_area += cross
-        cx += (point[0] + next_point[0]) * cross
-        cy += (point[1] + next_point[1]) * cross
-    signed_area *= 0.5
-    if abs(signed_area) < 1e-9:
-        return [
-            round(sum(point[0] for point in points) / len(points), 6),
-            round(sum(point[1] for point in points) / len(points), 6),
-        ]
-    return [
-        round(clamp01(cx / (6.0 * signed_area)), 6),
-        round(clamp01(cy / (6.0 * signed_area)), 6),
-    ]
-
-
-def _rasterize_mask(width: int, height: int, points: list[list[float]]) -> Image.Image:
-    if len(points) < 3:
-        raise ValueError("Cannot rasterize a mask without at least 3 points.")
-    mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask).polygon(_points_to_px(points, width, height), fill=255)
-    return mask
-
-
-def _mask_area(mask: Image.Image) -> int:
-    return int(mask.histogram()[255])
-
-
-def _mask_iou(first: Image.Image, second: Image.Image) -> float:
-    first_bin = first.convert("1")
-    second_bin = second.convert("1")
-    intersection = ImageChops.logical_and(first_bin, second_bin).convert("L").histogram()[255]
-    union = ImageChops.logical_or(first_bin, second_bin).convert("L").histogram()[255]
-    return float(intersection / max(1, union))
-
-
-def _mask_array_from_points(width: int, height: int, points: list[list[float]]) -> np.ndarray:
-    if len(points) < 3:
-        raise ValueError("Cannot rasterize a mask without at least 3 points.")
+def _mask_from_spans(mask_size: list[int], mask_spans: list[list[Any]]) -> np.ndarray:
+    width, height = mask_size
     mask = np.zeros((height, width), dtype=np.uint8)
-    polygon = np.array(_points_to_px(points, width, height), dtype=np.int32)
-    cv2.fillPoly(mask, [polygon], 255)
+    for row, runs in mask_spans:
+        for start, end in runs:
+            mask[int(row), int(start) : int(end) + 1] = 255
     return mask
 
 
-def _mask_image_from_array(mask: np.ndarray) -> Image.Image:
-    return Image.fromarray(mask.astype(np.uint8), mode="L")
+def _render_mask_in_full_image(
+    *,
+    context: HarnessImage,
+    selected_view: HarnessView,
+    mask_size: list[int],
+    mask_spans: list[list[Any]],
+) -> tuple[np.ndarray, np.ndarray]:
+    local_mask = _mask_from_spans(mask_size, mask_spans)
+    full_mask = np.zeros((context.height, context.width), dtype=np.uint8)
+    if selected_view.bounds:
+        left, top, right, bottom = _bounds_to_pixel_box(context.image, selected_view.bounds)
+        target_width = max(1, right - left)
+        target_height = max(1, bottom - top)
+        resized = cv2.resize(local_mask, (target_width, target_height), interpolation=cv2.INTER_NEAREST)
+        full_mask[top : top + target_height, left : left + target_width] = np.maximum(
+            full_mask[top : top + target_height, left : left + target_width],
+            resized,
+        )
+    else:
+        resized = cv2.resize(local_mask, (context.width, context.height), interpolation=cv2.INTER_NEAREST)
+        full_mask = np.maximum(full_mask, resized)
+    return local_mask, full_mask
 
 
-def _mask_iou_array(first: np.ndarray, second: np.ndarray) -> float:
-    intersection = int(np.count_nonzero((first > 0) & (second > 0)))
-    union = int(np.count_nonzero((first > 0) | (second > 0)))
-    return float(intersection / max(1, union))
+def _largest_external_contour(mask: np.ndarray) -> np.ndarray:
+    binary = (mask > 0).astype(np.uint8)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        raise ValueError("Segmentation mask has no visible contour.")
+    return max(contours, key=cv2.contourArea)
 
 
-def _mask_bbox_px(mask: np.ndarray) -> list[int]:
-    ys, xs = np.where(mask > 0)
-    if xs.size == 0 or ys.size == 0:
-        return []
-    return [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
+def _resample_contour_points(contour: np.ndarray, *, n_points: int = 32) -> list[list[float]]:
+    raw = contour.reshape(-1, 2).astype(np.float32)
+    if len(raw) < 3:
+        raise ValueError("Segmentation contour has fewer than 3 points.")
+    closed = np.vstack([raw, raw[0]])
+    diffs = np.diff(closed, axis=0)
+    lengths = np.sqrt(np.sum(diffs * diffs, axis=1))
+    perimeter = float(lengths.sum())
+    if perimeter <= 1e-6:
+        raise ValueError("Segmentation contour perimeter is zero.")
+    cumulative = np.concatenate([[0.0], np.cumsum(lengths)])
+    targets = np.linspace(0.0, perimeter, num=max(12, int(n_points)), endpoint=False)
+    sampled: list[list[float]] = []
+    segment_index = 0
+    for target in targets:
+        while segment_index < len(lengths) - 1 and cumulative[segment_index + 1] < target:
+            segment_index += 1
+        segment_length = max(lengths[segment_index], 1e-6)
+        alpha = (target - cumulative[segment_index]) / segment_length
+        point = closed[segment_index] + alpha * (closed[segment_index + 1] - closed[segment_index])
+        sampled.append([float(point[0]), float(point[1])])
+    return sampled
+
+
+def _mask_component_count(mask: np.ndarray) -> int:
+    binary = (mask > 0).astype(np.uint8)
+    if not binary.any():
+        return 0
+    total, _ = cv2.connectedComponents(binary, connectivity=8)
+    return max(0, int(total) - 1)
 
 
 def _mask_bbox(mask: np.ndarray) -> list[float]:
-    box = _mask_bbox_px(mask)
-    if not box:
+    ys, xs = np.where(mask > 0)
+    if xs.size == 0 or ys.size == 0:
         return []
     height, width = mask.shape[:2]
-    return _bbox_from_px(box, width, height)
-
-
-def _mask_centroid(mask: np.ndarray) -> list[float]:
-    moments = cv2.moments((mask > 0).astype(np.uint8))
-    if moments["m00"] == 0:
-        raise ValueError("Cannot compute centroid from an empty mask.")
-    height, width = mask.shape[:2]
-    cx = float(moments["m10"] / moments["m00"])
-    cy = float(moments["m01"] / moments["m00"])
     return [
-        round(clamp01(cx / max(1.0, width - 1.0)), 6),
-        round(clamp01(cy / max(1.0, height - 1.0)), 6),
+        round(float(xs.min() / max(1, width - 1)), 6),
+        round(float(ys.min() / max(1, height - 1)), 6),
+        round(float(xs.max() / max(1, width - 1)), 6),
+        round(float(ys.max() / max(1, height - 1)), 6),
     ]
 
 
-def _point_inside_mask(point: list[float], mask: np.ndarray) -> bool:
-    height, width = mask.shape[:2]
-    px = int(round(clamp01(point[0]) * max(1, width - 1)))
-    py = int(round(clamp01(point[1]) * max(1, height - 1)))
-    px = max(0, min(width - 1, px))
-    py = max(0, min(height - 1, py))
-    return bool(mask[py, px] > 0)
+def _mask_from_polygon_points(*, width: int, height: int, points: list[list[float]]) -> np.ndarray:
+    normalized = normalize_boundary_points(points)
+    polygon = np.array(
+        [
+            [
+                int(round(point[0] * max(1, width - 1))),
+                int(round(point[1] * max(1, height - 1))),
+            ]
+            for point in normalized
+        ],
+        dtype=np.int32,
+    )
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if len(polygon) >= 3:
+        cv2.fillPoly(mask, [polygon], 255)
+    return mask
 
 
-def _keep_largest_component(mask: np.ndarray) -> tuple[np.ndarray, bool]:
+def _largest_component(mask: np.ndarray) -> np.ndarray:
     binary = (mask > 0).astype(np.uint8)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    if num_labels <= 2:
-        return mask, False
-    largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-    cleaned = np.zeros_like(mask)
-    cleaned[labels == largest_label] = 255
-    return cleaned, True
+    total, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if total <= 2:
+        return (binary * 255).astype(np.uint8)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest_label = int(np.argmax(areas) + 1)
+    largest = np.zeros_like(binary)
+    largest[labels == largest_label] = 1
+    return (largest * 255).astype(np.uint8)
+
+
+def _mask_centroid(mask: np.ndarray) -> tuple[int, int] | None:
+    moments = cv2.moments((mask > 0).astype(np.uint8))
+    if moments["m00"] == 0:
+        return None
+    cx = int(round(moments["m10"] / moments["m00"]))
+    cy = int(round(moments["m01"] / moments["m00"]))
+    height, width = mask.shape[:2]
+    return max(0, min(width - 1, cx)), max(0, min(height - 1, cy))
 
 
 def _centroid_inside_parent(mask: np.ndarray, parent_mask: np.ndarray) -> bool:
-    moments = cv2.moments((mask > 0).astype(np.uint8))
-    if moments["m00"] == 0:
+    centroid = _mask_centroid(mask)
+    if centroid is None:
         return False
-    cx = int(round(moments["m10"] / moments["m00"]))
-    cy = int(round(moments["m01"] / moments["m00"]))
-    height, width = parent_mask.shape[:2]
-    cx = max(0, min(width - 1, cx))
-    cy = max(0, min(height - 1, cy))
+    cx, cy = centroid
     return bool(parent_mask[cy, cx] > 0)
 
 
-def _boundary_points_from_mask(mask: np.ndarray, *, max_points: int = 16) -> list[list[float]]:
-    contours, _ = cv2.findContours((mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        return []
-    contour = max(contours, key=cv2.contourArea).reshape(-1, 2)
-    if contour.shape[0] < 3:
-        return []
-    count = max(8, min(max_points, contour.shape[0]))
-    sample_indices = np.linspace(0, contour.shape[0] - 1, count, dtype=int)
-    sampled = contour[sample_indices]
-    height, width = mask.shape[:2]
-    points = [
-        [
-            round(clamp01(float(x) / max(1.0, width - 1.0)), 6),
-            round(clamp01(float(y) / max(1.0, height - 1.0)), 6),
-        ]
-        for x, y in sampled
-    ]
-    return _sort_polygon_points(points)
+def _mask_iou(first: np.ndarray, second: np.ndarray) -> float:
+    intersection = np.count_nonzero(cv2.bitwise_and(first, second))
+    union = np.count_nonzero(cv2.bitwise_or(first, second))
+    if union <= 0:
+        return 0.0
+    return float(intersection / union)
 
 
-def _parent_mask_from_grounding(
-    parent_output: dict[str, Any] | None,
-    *,
-    width: int,
-    height: int,
-) -> np.ndarray | None:
-    parent = parent_grounding(parent_output)
+def _parent_mask_from_grounding(*, width: int, height: int, parent: dict[str, Any]) -> np.ndarray | None:
     points = parent.get("boundary_points")
-    if isinstance(points, list) and len(points) >= 3:
-        return _mask_array_from_points(width, height, normalize_boundary_points(points))
-    bbox = parent.get("bbox")
-    if isinstance(bbox, list) and len(bbox) == 4:
-        x1, y1, x2, y2 = _bbox_to_px(normalize_bbox(bbox), width, height)
-        mask = np.zeros((height, width), dtype=np.uint8)
-        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, thickness=-1)
-        return mask
-    return None
+    if not isinstance(points, list) or len(points) < 3:
+        return None
+    return _mask_from_polygon_points(width=width, height=height, points=points)
 
 
-def _mask_compactness(mask: np.ndarray) -> float:
-    contours, _ = cv2.findContours((mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return 0.0
-    contour = max(contours, key=cv2.contourArea)
-    area = float(cv2.contourArea(contour))
-    perimeter = float(cv2.arcLength(contour, True))
-    if perimeter <= 0.0:
-        return 0.0
-    return float(4.0 * math.pi * area / max(perimeter * perimeter, 1e-9))
-
-
-def _is_primary_dark_lesion_step(step: dict[str, Any], target_label: str, parent_mask: np.ndarray | None) -> bool:
-    if parent_mask is not None:
-        return False
-    text = _joined_step_text(step, target_label)
-    return (
-        _contrast_expectation(step, target_label) == "dark"
-        and "lesion" in text
-        and any(term in text for term in ["single dominant lesion", "dominant", "mass", "target"])
-    )
-
-
-def _dedupe_proposals(candidates: list[dict[str, Any]], *, max_candidates: int = 5) -> list[dict[str, Any]]:
-    selected: list[dict[str, Any]] = []
-    for candidate in sorted(candidates, key=lambda item: float(item.get("score", 0.0)), reverse=True):
-        current_mask = candidate["mask_array"]
-        if any(_mask_iou_array(current_mask, existing["mask_array"]) > 0.6 for existing in selected):
-            continue
-        selected.append(candidate)
-        if len(selected) >= max_candidates:
-            break
-    for index, item in enumerate(selected, start=1):
-        item["proposal_id"] = index
-    return selected
-
-
-def _generate_dark_component_proposals(
-    context: HarnessImage,
+def _candidate_from_mask(
     *,
-    step: dict[str, Any],
-    target_label: str,
-    max_candidates: int = 5,
-) -> list[dict[str, Any]]:
-    gray = np.asarray(ImageOps.grayscale(context.image), dtype=np.uint8)
-    blurred = cv2.medianBlur(gray, 5)
-    image_area = float(gray.size)
-    usable_height = max(1, int(round(gray.shape[0] * 0.82)))
-    search_region = blurred[:usable_height, :]
-    threshold_values = sorted({int(np.percentile(search_region, percentile)) for percentile in (5, 7, 9, 11, 13, 15, 18, 21, 24)})
-    kernel_open = np.ones((3, 3), dtype=np.uint8)
-    kernel_close = np.ones((5, 5), dtype=np.uint8)
-    candidate_pool: list[dict[str, Any]] = []
-
-    for threshold in threshold_values:
-        _, binary = cv2.threshold(blurred, threshold, 255, cv2.THRESH_BINARY_INV)
-        binary[usable_height:, :] = 0
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_open)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), connectivity=8)
-        for label_id in range(1, num_labels):
-            x = int(stats[label_id, cv2.CC_STAT_LEFT])
-            y = int(stats[label_id, cv2.CC_STAT_TOP])
-            w = int(stats[label_id, cv2.CC_STAT_WIDTH])
-            h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-            area_px = int(stats[label_id, cv2.CC_STAT_AREA])
-            area_ratio_image = area_px / max(1.0, image_area)
-            if area_ratio_image < 0.0008 or area_ratio_image > 0.18:
-                continue
-            aspect_ratio = max(w, h) / max(1.0, min(w, h))
-            if aspect_ratio > 4.0:
-                continue
-            component_mask = np.zeros_like(binary)
-            component_mask[labels == label_id] = 255
-            compactness = _mask_compactness(component_mask)
-            bbox = _mask_bbox(component_mask)
-            if not bbox or bbox[1] > 0.78:
-                continue
-            contrast = _contrast_stats(context.image, component_mask, bbox)
-            edge_alignment = _edge_alignment_stats(context.image, component_mask)
-            if not contrast.get("available"):
-                continue
-            target_minus_surrounding = float(contrast["target_minus_surrounding"])
-            if target_minus_surrounding > -8.0:
-                continue
-            border_penalty = 0.0
-            if x <= 2 or y <= 2 or x + w >= context.width - 2:
-                border_penalty = 0.12
-            edge_bonus = 0.0
-            if edge_alignment.get("available"):
-                edge_bonus = min(0.2, max(0.0, (float(edge_alignment["boundary_vs_image"]) - 1.0) / 5.0))
-            score = (
-                min(0.5, max(0.0, -target_minus_surrounding / 140.0))
-                + min(0.22, area_ratio_image / 0.08)
-                + min(0.18, compactness / 2.5)
-                + edge_bonus
-                - border_penalty
-            )
-            candidate_pool.append(
-                {
-                    "bbox": bbox,
-                    "mask_array": component_mask,
-                    "area_ratio_image": round(area_ratio_image, 6),
-                    "compactness": round(compactness, 6),
-                    "contrast": contrast,
-                    "edge_alignment": edge_alignment,
-                    "score": round(score, 6),
-                    "source_threshold": threshold,
-                }
-            )
-
-    return _dedupe_proposals(candidate_pool, max_candidates=max_candidates)
-
-
-def _render_proposal_overlay(context: HarnessImage, proposals: list[dict[str, Any]], *, label: str) -> str:
-    canvas = context.image.convert("RGB").copy()
-    draw = ImageDraw.Draw(canvas)
-    colors = [
-        (229, 57, 53),
-        (30, 136, 229),
-        (67, 160, 71),
-        (251, 140, 0),
-        (123, 31, 162),
-    ]
-    for index, proposal in enumerate(proposals):
-        bbox = proposal["bbox"]
-        color = colors[index % len(colors)]
-        x1, y1, x2, y2 = _bbox_to_px(bbox, context.width, context.height)
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
-        tag = str(proposal["proposal_id"])
-        draw.rectangle([x1, max(0, y1 - 20), x1 + 18, y1], fill=(255, 255, 255))
-        draw.text((x1 + 4, max(0, y1 - 17)), tag, fill=color)
-    canvas = _draw_grid(canvas, label=label)
-    return _image_to_data_url(canvas)
-
-
-def _request_proposal_selection(
-    *,
-    request_json: JsonImageRequester,
     context: HarnessImage,
-    proposals: list[dict[str, Any]],
-    step: dict[str, Any],
-    target_label: str,
+    selected_view: HarnessView,
+    mask_size: list[int],
+    mask_spans: list[list[Any]],
+    conclusion: str,
+    confidence: float,
+    rationale: str,
 ) -> dict[str, Any]:
-    proposal_image_url = _render_proposal_overlay(context, proposals, label="candidate proposals")
-    proposal_lines = "\n".join(
-        f"- Proposal {item['proposal_id']}: bbox={item['bbox']}, area_ratio_image={item['area_ratio_image']}, compactness={item['compactness']}, contrast={item['contrast'].get('target_minus_surrounding')}"
-        for item in proposals
+    local_mask, full_mask = _render_mask_in_full_image(
+        context=context,
+        selected_view=selected_view,
+        mask_size=mask_size,
+        mask_spans=mask_spans,
     )
-    prompt = dedent(
-        f"""
-        Select the single proposal that best matches the requested target.
-
-        Target: {target_label}
-        Step action: {step.get('action') or ''}
-
-        Candidate proposals:
-        {proposal_lines}
-
-        Return ONLY JSON:
-        {{
-          "selected_id": 1,
-          "confidence": 0.0,
-          "rationale": "short visual justification"
-        }}
-
-        Rules:
-        - Choose exactly one proposal id from the visible overlay.
-        - Prefer the single dominant requested lesion rather than a smaller satellite, duct, vessel, artifact, or annotation.
-        - Use the image appearance first; the proposal stats are only supporting context.
-        - Do not diagnose.
-        """
-    ).strip()
-    parsed = request_json(
-        proposal_image_url,
-        prompt,
-        900,
-        "You choose the best medical image proposal for downstream boundary refinement. Return only strict JSON.",
+    contour = _largest_external_contour(full_mask)
+    sampled_pixels = _resample_contour_points(contour, n_points=32)
+    points = canonicalize_boundary_points(
+        [
+            [
+                round(float(point[0]) / max(1.0, context.width - 1.0), 6),
+                round(float(point[1]) / max(1.0, context.height - 1.0), 6),
+            ]
+            for point in sampled_pixels
+        ]
     )
-    selected_id = int(parsed.get("selected_id"))
-    selected = next((item for item in proposals if int(item["proposal_id"]) == selected_id), None)
-    if selected is None:
-        raise ValueError(f"Proposal selector returned invalid proposal id: {selected_id}")
+    bbox = bbox_from_points(points)
+    area_pixels = int(np.count_nonzero(full_mask))
+    area_ratio_image = float(area_pixels / max(1, context.width * context.height))
     return {
-        "selected_id": selected_id,
-        "confidence": clamp01(parsed.get("confidence", 0.0)),
-        "rationale": str(parsed.get("rationale", "")).strip(),
-        "proposal": selected,
-        "proposals": proposals,
+        "conclusion": conclusion,
+        "confidence": confidence,
+        "rationale": rationale,
+        "selected_view": selected_view.name,
+        "selected_view_label": selected_view.label,
+        "selected_view_bounds": list(selected_view.bounds) if selected_view.bounds else [0.0, 0.0, 1.0, 1.0],
+        "mask_size": mask_size,
+        "mask_spans": mask_spans,
+        "mask_component_count": _mask_component_count(full_mask),
+        "mask_area_ratio_image": round(area_ratio_image, 6),
+        "raw_boundary_point_count": len(points),
+        "local_mask_foreground_pixels": int(np.count_nonzero(local_mask)),
+        "mask_bbox": _mask_bbox(full_mask),
+        "bbox": bbox,
+        "boundary_points": points,
     }
 
 
@@ -573,9 +752,107 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _normalize_text(value: object) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    return text
+
+
+def _knowledge_decomposition(
+    *,
+    target_label: str,
+    step: dict[str, Any],
+    relationship: str,
+    parent_bbox: list[float] | None,
+) -> str:
+    action = _normalize_text(step.get("action"))
+    finding = _normalize_text(step.get("finding"))
+    scope = "relative evidence region" if parent_bbox and relationship else "single visible target or strongest supporting local evidence region"
+    relation_line = (
+        f"- Treat the request as parent-anchored evidence and satisfy the stated relation `{relationship}` before tracing the boundary."
+        if parent_bbox and relationship
+        else "- Treat the request as one coherent visual target, not as scattered hints or multiple disconnected candidates."
+    )
+    return dedent(
+        f"""
+        Visible evidence decomposition:
+        - Do not localize a diagnosis name directly. Translate the request into visible evidence first.
+        - Requested target text: {target_label}
+        - Step finding: {finding or 'not provided'}
+        - Step action: {action or 'not provided'}
+        - Resolve the request into one {scope}.
+        - Evaluate the candidate using these visible axes together: outer extent, boundary/margin, internal pattern or density/intensity/echo, local contrast versus surrounding tissue, and spatial/anatomical position.
+        {relation_line}
+        - If the label is abstract, choose the smallest contiguous region whose visible cues most directly support this step.
+        - If the finding describes a property of an already grounded target, preserve the same target extent unless the action explicitly asks for a different relative region.
+        """
+    ).strip()
+
+
+def _segmentation_boundary_rules() -> str:
+    return dedent(
+        """
+        ROI boundary protocol:
+        - Return ordered ROI boundary points that trace the true visible lesion boundary.
+        - Return exactly 32 boundary point pairs in the selected_view coordinate frame.
+        - Internally count the pairs before responding; do not return 15, 16, or any number other than 32.
+        - Points must run around one closed contour in clockwise or counterclockwise order with no self-intersection.
+        - Include all meaningful shape changes: poles, corners, lobulations, indentations, and flat segments.
+        - Even for a simple oval lesion, include intermediate points along each arc instead of only a few extremal points.
+        - Put the contour on the target-to-background transition, not on a surrounding artifact, shadow, enhancement band, measurement mark, or label.
+        - If a connected low-contrast extension belongs to the same target, include it; if a bright rim, halo, or acoustic artifact is outside the target body, exclude it.
+        - Do not return a fitted circle, ellipse, coarse box, or a sparse anchor set.
+        - When these points are connected, they should directly define a valid segmentation polygon for the target.
+        """
+    ).strip()
+
+
+def _analysis_protocol() -> str:
+    return dedent(
+        """
+        Analysis protocol:
+        - Use the full image to identify the correct anatomy and reject labels, rulers, overlays, and background.
+        - Trace the requested target directly in the full-image coordinate frame.
+        - Return boundary points normalized to the entire full image.
+        - Do not use crop-local, panel-local, or displayed-pixel coordinates.
+        """
+    ).strip()
+
+
+def _extent_protocol(*, task_kind: str, target_scope: str, relationship: str) -> str:
+    if task_kind == "locate_primary_target":
+        return dedent(
+            """
+            Extent protocol for the primary target:
+            - Trace the full visible outer boundary of the requested entity.
+            - Do not shrink to only the darkest core, brightest core, central cavity, strongest contrast patch, or most salient subregion.
+            - Include a thin rim, wall, or low-contrast outer edge only when it is part of the target itself.
+            - Exclude secondary imaging effects around the target, including posterior acoustic shadowing or enhancement, surrounding echogenic tissue bands, edema, halo artifact, ruler/text overlays, and empty background.
+            - For ultrasound mass or lesion targets, trace the mass body at the true tissue interface; do not wrap the contour around adjacent bright parenchyma or acoustic artifacts.
+            - Prefer complete coverage of the visible entity over conservative under-coverage.
+            """
+        ).strip()
+    if relationship and target_scope == "relative_region":
+        return dedent(
+            """
+            Extent protocol for a relative evidence region:
+            - Localize the contiguous region that satisfies the stated parent-relative relation.
+            - Do not collapse the region to a tiny point-like cue when a broader anchored area is visibly present.
+            """
+        ).strip()
+    return dedent(
+        """
+        Extent protocol for supporting evidence:
+        - Return the smallest contiguous local region that directly supports this step.
+        - Do not expand the boundary to unrelated surrounding tissue.
+        - Exclude secondary artifacts and surrounding normal structures unless the step explicitly asks for them.
+        """
+    ).strip()
+
+
 def _harness_config(step: dict[str, Any]) -> dict[str, Any]:
     tool_config = step.get("tool_config") if isinstance(step.get("tool_config"), dict) else {}
     keys = [
+        "target_scope",
         "evidence_mode",
         "relative_to_step",
         "relationship",
@@ -586,300 +863,8 @@ def _harness_config(step: dict[str, Any]) -> dict[str, Any]:
     return {key: tool_config.get(key, step.get(key)) for key in keys if tool_config.get(key, step.get(key)) not in (None, "", [], {})}
 
 
-def _joined_step_text(step: dict[str, Any], target_label: str) -> str:
-    config = _harness_config(step)
-    return " ".join(
-        str(item or "")
-        for item in [
-            target_label,
-            step.get("action"),
-            step.get("finding"),
-            " ".join(_string_list(config.get("spatial_priors"))),
-            " ".join(_string_list(config.get("sanity_checks"))),
-        ]
-    ).lower()
-
-
-def _contrast_expectation(step: dict[str, Any], target_label: str) -> str | None:
-    text = _joined_step_text(step, target_label)
-    if any(term in text for term in ["enhancement brighter than surrounding", "brighter than surrounding", "posterior acoustic enhancement", "enhancement present"]):
-        return "bright"
-    if "dark_target_contrast" in text or any(term in text for term in ["hypoechoic", "anechoic", "dark lesion", "dark target"]):
-        return "dark"
-    if any(term in text for term in ["posterior shadow", "acoustic shadow", "shadow deep to"]):
-        return "dark"
-    return None
-
-
-def _needs_dark_target_validation(step: dict[str, Any], target_label: str) -> bool:
-    return _contrast_expectation(step, target_label) == "dark"
-
-
-def _needs_bright_target_validation(step: dict[str, Any], target_label: str) -> bool:
-    return _contrast_expectation(step, target_label) == "bright"
-
-
-def _needs_not_text_validation(step: dict[str, Any], target_label: str) -> bool:
-    text = _joined_step_text(step, target_label)
-    return "not_text_annotation" in text or any(term in text for term in ["lesion", "mass", "optic", "disc", "cup"])
-
-
-def _prefers_single_dominant_target(step: dict[str, Any], target_label: str) -> bool:
-    text = _joined_step_text(step, target_label)
-    return "single dominant lesion" in text or ("dominant" in text and any(term in text for term in ["lesion", "mass", "target"]))
-
-
-def _expanded_rect_around_bbox(bbox: list[float], width: int, height: int, *, scale: float) -> list[int]:
-    x1, y1, x2, y2 = _bbox_to_px(bbox, width, height)
-    bw = max(2, x2 - x1)
-    bh = max(2, y2 - y1)
-    cx = (x1 + x2) / 2
-    cy = (y1 + y2) / 2
-    half_w = bw * scale / 2
-    half_h = bh * scale / 2
-    return [
-        max(0, int(round(cx - half_w))),
-        max(0, int(round(cy - half_h))),
-        min(width - 1, int(round(cx + half_w))),
-        min(height - 1, int(round(cy + half_h))),
-    ]
-
-
-def _contrast_stats(image: Image.Image, mask: np.ndarray, bbox: list[float]) -> dict[str, Any]:
-    gray = np.asarray(ImageOps.grayscale(image), dtype=np.uint8)
-    height, width = gray.shape[:2]
-    region_box = _expanded_rect_around_bbox(bbox, width, height, scale=3.2)
-    region_mask = np.zeros((height, width), dtype=np.uint8)
-    cv2.rectangle(region_mask, (region_box[0], region_box[1]), (region_box[2], region_box[3]), 255, thickness=-1)
-    annulus = cv2.subtract(region_mask, mask)
-    target_area = int(np.count_nonzero(mask))
-    annulus_area = int(np.count_nonzero(annulus))
-    if target_area == 0 or annulus_area == 0:
-        return {"available": False}
-    target_mean = float(gray[mask > 0].mean())
-    annulus_mean = float(gray[annulus > 0].mean())
-    return {
-        "available": True,
-        "target_mean_gray": round(target_mean, 3),
-        "surrounding_mean_gray": round(annulus_mean, 3),
-        "target_minus_surrounding": round(target_mean - annulus_mean, 3),
-    }
-
-
-def _edge_alignment_stats(image: Image.Image, mask: np.ndarray) -> dict[str, Any]:
-    gray = np.asarray(ImageOps.grayscale(image), dtype=np.uint8)
-    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    magnitude = cv2.magnitude(grad_x, grad_y)
-    border = cv2.morphologyEx((mask > 0).astype(np.uint8), cv2.MORPH_GRADIENT, np.ones((3, 3), dtype=np.uint8))
-    border_values = magnitude[border > 0]
-    if border_values.size == 0:
-        return {"available": False}
-    image_mean = float(magnitude.mean())
-    boundary_mean = float(border_values.mean())
-    return {
-        "available": True,
-        "boundary_grad_mean": round(boundary_mean, 3),
-        "image_grad_mean": round(image_mean, 3),
-        "boundary_vs_image": round(boundary_mean / max(image_mean, 1e-6), 3),
-    }
-
-
 def _normalize_relation_name(value: object) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-
-
-def _relation_focus_crop_box(
-    *,
-    context: HarnessImage,
-    focus_bbox: list[float],
-    parent_bbox: list[float] | None,
-    relationship: str,
-    scale: float,
-) -> list[int]:
-    width, height = context.width, context.height
-    if parent_bbox is None:
-        return _expanded_rect_around_bbox(focus_bbox, width, height, scale=scale)
-    px1, py1, px2, py2 = _bbox_to_px(parent_bbox, width, height)
-    pw = max(8, px2 - px1)
-    ph = max(8, py2 - py1)
-    relation = _normalize_relation_name(relationship)
-    if relation in {"inside_parent", "within_parent", "part_of_parent"}:
-        pad = max(int(round(max(pw, ph) * 0.3)), 20)
-        return [
-            max(0, px1 - pad),
-            max(0, py1 - pad),
-            min(width - 1, px2 + pad),
-            min(height - 1, py2 + pad),
-        ]
-    if relation in {"deep_to_parent", "posterior_to_parent"}:
-        lateral_pad = max(int(round(pw * 0.45)), 24)
-        top_pad = max(int(round(ph * 0.35)), 18)
-        bottom_pad = max(int(round(ph * 1.4)), 48)
-        return [
-            max(0, px1 - lateral_pad),
-            max(0, py1 - top_pad),
-            min(width - 1, px2 + lateral_pad),
-            min(height - 1, py2 + bottom_pad),
-        ]
-    if relation in {"adjacent_to_parent", "overlaps_parent"}:
-        pad = max(int(round(max(pw, ph) * 0.6)), 28)
-        return [
-            max(0, px1 - pad),
-            max(0, py1 - pad),
-            min(width - 1, px2 + pad),
-            min(height - 1, py2 + pad),
-        ]
-    return _expanded_rect_around_bbox(focus_bbox, width, height, scale=scale)
-
-
-def _overlay_parent_contour(crop: Image.Image, crop_box: list[int], parent_mask: np.ndarray | None) -> tuple[Image.Image, bool]:
-    if parent_mask is None:
-        return crop, False
-    x1, y1, x2, y2 = crop_box
-    parent_crop = parent_mask[y1 : y2 + 1, x1 : x2 + 1]
-    if parent_crop.size == 0 or int(np.count_nonzero(parent_crop)) == 0:
-        return crop, False
-    crop_bgr = cv2.cvtColor(np.asarray(crop.convert("RGB")), cv2.COLOR_RGB2BGR)
-    overlay = crop_bgr.copy()
-    contours, _ = cv2.findContours((parent_crop > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return crop, False
-    cv2.drawContours(overlay, contours, -1, (0, 255, 0), 2)
-    blended = cv2.addWeighted(overlay, 0.4, crop_bgr, 0.6, 0)
-    return Image.fromarray(cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)), True
-
-
-def _validate_candidate(
-    *,
-    context: HarnessImage,
-    candidate: dict[str, Any],
-    step: dict[str, Any],
-    target_label: str,
-    parent_bbox: list[float] | None,
-    parent_mask: np.ndarray | None,
-) -> dict[str, Any]:
-    points = candidate["boundary_points"]
-    mask_array = _mask_array_from_points(context.width, context.height, points)
-    config = _harness_config(step)
-    relationship = _normalize_relation_name(config.get("relationship"))
-    failed: list[str] = []
-    warnings: list[str] = []
-    adjustments: list[str] = []
-    inside_fraction: float | None = None
-    area_ratio_to_parent: float | None = None
-
-    if "single_connected_component" in _string_list(config.get("sanity_checks")):
-        mask_array, removed = _keep_largest_component(mask_array)
-        if removed:
-            adjustments.append("kept_largest_component")
-
-    area_px = int(np.count_nonzero(mask_array))
-    area_ratio_image = area_px / max(1, context.width * context.height)
-    if len(points) < 8:
-        failed.append("insufficient_boundary_points")
-    if area_ratio_image < 0.00002:
-        failed.append("mask_too_small")
-    if area_ratio_image > 0.45:
-        failed.append("mask_too_large")
-
-    if parent_mask is not None and parent_mask.shape == mask_array.shape:
-        parent_area = int(np.count_nonzero(parent_mask))
-        inside_mask = cv2.bitwise_and(mask_array, parent_mask)
-        inside_area = int(np.count_nonzero(inside_mask))
-        inside_fraction = float(inside_area / max(1, area_px))
-        area_ratio_to_parent = float(area_px / max(1, parent_area))
-        if relationship in {"inside_parent", "within_parent", "part_of_parent"} and inside_fraction < 0.98:
-            failed.append("inside_parent")
-            if inside_area > 0:
-                mask_array = inside_mask
-                adjustments.append("clipped_to_parent")
-        if "centroid_within_parent" in _string_list(config.get("sanity_checks")) and not _centroid_inside_parent(mask_array, parent_mask):
-            failed.append("centroid_within_parent")
-        if "size_ratio_to_parent" in _string_list(config.get("sanity_checks")) and area_ratio_to_parent > 0.9:
-            failed.append("size_ratio_to_parent")
-
-    area_px = int(np.count_nonzero(mask_array))
-    area_ratio_image = area_px / max(1, context.width * context.height)
-    points = _boundary_points_from_mask(mask_array)
-    if len(points) < 8:
-        failed.append("insufficient_boundary_points_after_harness")
-    bbox = _mask_bbox(mask_array) or candidate["bbox"]
-    try:
-        point = candidate["positive_point"]
-        if not _point_inside_mask(point, mask_array):
-            point = _mask_centroid(mask_array)
-            adjustments.append("positive_point_replaced_by_mask_centroid")
-        if not inside_bbox(point, bbox):
-            failed.append("positive_point_outside_bbox")
-    except ValueError:
-        point = candidate["positive_point"]
-        failed.append("empty_mask")
-
-    if _needs_not_text_validation(step, target_label) and bbox and bbox[1] > 0.78:
-        failed.append("target_overlaps_bottom_text_annotation_zone")
-
-    if parent_bbox and bbox:
-        if relationship in {"deep_to_parent", "posterior_to_parent", "adjacent_to_parent"}:
-            parent_center_x = (parent_bbox[0] + parent_bbox[2]) / 2
-            target_center_x = (bbox[0] + bbox[2]) / 2
-            target_center_y = (bbox[1] + bbox[3]) / 2
-            if relationship in {"deep_to_parent", "posterior_to_parent"}:
-                if bbox[3] <= parent_bbox[3] + 0.005:
-                    failed.append("target_not_deep_to_parent")
-                if target_center_y <= parent_bbox[3]:
-                    failed.append("target_center_not_deep_to_parent")
-            horizontal_span = max(min(bbox[2], parent_bbox[2]) - max(bbox[0], parent_bbox[0]), 0.0)
-            if relationship in {"deep_to_parent", "posterior_to_parent"} and horizontal_span < 0.2 * max(parent_bbox[2] - parent_bbox[0], 1e-6):
-                failed.append("target_not_horizontally_overlapping_parent")
-            if abs(parent_center_x - target_center_x) > max(parent_bbox[2] - parent_bbox[0], 0.08) * 1.5:
-                failed.append("target_not_horizontally_aligned_with_parent")
-
-    compactness = 0.0
-    perimeter = polygon_perimeter(points)
-    normalized_area = polygon_area(points)
-    if perimeter > 0:
-        compactness = 4 * math.pi * normalized_area / max(perimeter * perimeter, 1e-9)
-    if "compact_shape" in _string_list(config.get("sanity_checks")) and compactness < 0.12:
-        failed.append("mask_not_compact")
-
-    contrast = _contrast_stats(context.image, mask_array, bbox)
-    edge_alignment = _edge_alignment_stats(context.image, mask_array)
-    if _needs_dark_target_validation(step, target_label):
-        if not contrast.get("available"):
-            failed.append("dark_target_contrast_unavailable")
-        elif float(contrast["target_minus_surrounding"]) > -8.0:
-            failed.append("dark_target_contrast_failed")
-    elif _needs_bright_target_validation(step, target_label):
-        if not contrast.get("available"):
-            failed.append("bright_target_contrast_unavailable")
-        elif float(contrast["target_minus_surrounding"]) < 8.0:
-            failed.append("bright_target_contrast_failed")
-    elif contrast.get("available") and abs(float(contrast["target_minus_surrounding"])) < 2.0:
-        warnings.append("weak_local_contrast")
-    if edge_alignment.get("available") and float(edge_alignment["boundary_vs_image"]) < 1.05:
-        warnings.append("weak_boundary_edge_alignment")
-
-    validation = {
-        "valid": not failed,
-        "failed_checks": failed,
-        "warnings": warnings,
-        "applied_adjustments": adjustments,
-        "area_px": area_px,
-        "area_ratio_image": round(area_ratio_image, 6),
-        "compactness": round(compactness, 6),
-        "contrast": contrast,
-        "edge_alignment": edge_alignment,
-        "inside_parent_fraction": round(inside_fraction, 6) if inside_fraction is not None else None,
-        "area_ratio_to_parent": round(area_ratio_to_parent, 6) if area_ratio_to_parent is not None else None,
-    }
-    candidate["bbox"] = bbox
-    candidate["positive_point"] = point
-    candidate["boundary_points"] = points
-    candidate["mask_array"] = mask_array
-    candidate["mask"] = _mask_image_from_array(mask_array)
-    candidate["validation"] = validation
-    return validation
 
 
 def _extract_grounding_object(payload: dict[str, Any]) -> dict[str, Any]:
@@ -888,83 +873,103 @@ def _extract_grounding_object(payload: dict[str, Any]) -> dict[str, Any]:
     nested = payload.get("grounding") if isinstance(payload.get("grounding"), dict) else {}
     return {
         "boundary_points": payload.get("boundary_points", nested.get("boundary_points")),
-        "coarse_bbox": payload.get("coarse_bbox", payload.get("bbox", nested.get("coarse_bbox", nested.get("bbox")))),
         "positive_point": payload.get("positive_point", nested.get("positive_point")),
+        "coarse_bbox": payload.get("coarse_bbox", payload.get("bbox", nested.get("coarse_bbox", nested.get("bbox")))),
+        "selected_view": payload.get("selected_view", nested.get("selected_view")),
+        "mask_size": payload.get("mask_size", nested.get("mask_size")),
+        "mask_spans": payload.get("mask_spans", nested.get("mask_spans")),
         "conclusion": payload.get("conclusion", ""),
-        "confidence": payload.get("confidence", nested.get("confidence", 0.0)),
+        "confidence": payload.get("confidence", nested.get("confidence")),
         "rationale": payload.get("rationale", nested.get("rationale", "")),
     }
 
 
-def _normalize_candidate(
-    payload: dict[str, Any],
-    *,
-    crop_context: CropContext | None = None,
-) -> dict[str, Any]:
+def _require_confidence(payload: dict[str, Any], *, label: str) -> float:
+    if "confidence" not in payload or payload.get("confidence") is None:
+        raise ValueError(f"{label} response must include confidence.")
+    return clamp01(payload["confidence"])
+
+
+def _resolve_selected_view(selected_view: object, views: list[HarnessView]) -> HarnessView:
+    if isinstance(selected_view, int):
+        index = int(selected_view) - 1
+        if 0 <= index < len(views):
+            return views[index]
+    text = str(selected_view or "").strip().lower()
+    if not text:
+        raise ValueError("Grounding candidate must include selected_view.")
+    for index, view in enumerate(views, start=1):
+        if text in {view.name.lower(), view.label.lower(), f"view {index}", f"view_{index}", str(index)}:
+            return view
+    for index, view in enumerate(views, start=1):
+        if view.label.lower().startswith(text):
+            return view
+        if text.startswith(f"view {index}") or text.startswith(f"view_{index}"):
+            return view
+    raise ValueError(f"Grounding candidate selected_view is unknown: {selected_view}")
+
+
+def _normalize_candidate(payload: dict[str, Any], *, views: list[HarnessView], context: HarnessImage) -> dict[str, Any]:
     obj = _extract_grounding_object(payload)
-    points = _sort_polygon_points(normalize_boundary_points(obj["boundary_points"]))
-    point = normalize_point(obj["positive_point"])
-    bbox = normalize_bbox(obj["coarse_bbox"]) if obj.get("coarse_bbox") else bbox_from_points(points)
-    if crop_context is not None:
-        points = [_map_point_from_crop(item, crop_context) for item in points]
-        point = _map_point_from_crop(point, crop_context)
+    selected_view = _resolve_selected_view(obj.get("selected_view"), views)
+    conclusion = str(obj.get("conclusion") or "").strip() or "localized"
+    confidence = _require_confidence(obj, label="Grounding candidate")
+    rationale = str(obj.get("rationale") or "").strip()
+    if obj.get("boundary_points") is not None:
+        positive_point = normalize_point(obj.get("positive_point"))
+        coarse_bbox_local = normalize_bbox(obj.get("coarse_bbox"))
+        raw_local_points = normalize_boundary_points(obj["boundary_points"])
+        local_points = resample_boundary_points(
+            canonicalize_boundary_points(raw_local_points),
+            n_points=REQUIRED_BOUNDARY_POINT_COUNT,
+        )
+        points = canonicalize_boundary_points(map_points_from_view(local_points, selected_view))
+        positive_point = map_point_from_view(positive_point, selected_view)
+        coarse_top_left = map_point_from_view([coarse_bbox_local[0], coarse_bbox_local[1]], selected_view)
+        coarse_bottom_right = map_point_from_view([coarse_bbox_local[2], coarse_bbox_local[3]], selected_view)
+        coarse_bbox = normalize_bbox([coarse_top_left[0], coarse_top_left[1], coarse_bottom_right[0], coarse_bottom_right[1]])
         bbox = bbox_from_points(points)
-    else:
-        bbox = bbox_from_points(points)
-    return {
-        "conclusion": str(obj.get("conclusion") or "").strip() or "localized",
-        "confidence": clamp01(obj.get("confidence", 0.0)),
-        "rationale": str(obj.get("rationale") or "").strip(),
-        "bbox": bbox,
-        "positive_point": point,
-        "boundary_points": points,
-    }
-
-
-def _map_point_from_crop(point: list[float], crop_context: CropContext) -> list[float]:
-    x1, y1, x2, y2 = crop_context.crop_box_norm
-    x = x1 + clamp01(point[0]) * max(1e-9, x2 - x1)
-    y = y1 + clamp01(point[1]) * max(1e-9, y2 - y1)
-    return [round(clamp01(x), 6), round(clamp01(y), 6)]
-
-
-def _crop_context_from_bbox(
-    context: HarnessImage,
-    bbox: list[float],
-    *,
-    label: str,
-    pad_ratio: float = 2.0,
-    parent_bbox: list[float] | None = None,
-    parent_mask: np.ndarray | None = None,
-    relationship: str = "",
-) -> CropContext:
-    width, height = context.width, context.height
-    crop_box = _relation_focus_crop_box(
-        context=context,
-        focus_bbox=bbox,
-        parent_bbox=parent_bbox,
-        relationship=relationship,
-        scale=1.0 + pad_ratio,
-    )
-    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
-        raise ValueError("Grounding crop has invalid dimensions.")
-    crop = context.image.crop((crop_box[0], crop_box[1], crop_box[2] + 1, crop_box[3] + 1))
-    crop, parent_overlay = _overlay_parent_contour(crop, crop_box, parent_mask)
-    crop = _draw_grid(crop, label=label)
-    return CropContext(
-        data_url=_image_to_data_url(crop),
-        crop_box_px=crop_box,
-        crop_box_norm=_bbox_from_px(crop_box, width, height),
-        width=crop.width,
-        height=crop.height,
-        parent_overlay=parent_overlay,
-        label=label,
-    )
+        polygon = np.array(
+            [
+                [
+                    int(round(point[0] * max(1.0, context.width - 1.0))),
+                    int(round(point[1] * max(1.0, context.height - 1.0))),
+                ]
+                for point in points
+            ],
+            dtype=np.int32,
+        )
+        full_mask = np.zeros((context.height, context.width), dtype=np.uint8)
+        cv2.fillPoly(full_mask, [polygon], 255)
+        return {
+            "conclusion": conclusion,
+            "confidence": confidence,
+            "rationale": rationale,
+            "selected_view": selected_view.name,
+            "selected_view_label": selected_view.label,
+            "selected_view_bounds": list(selected_view.bounds) if selected_view.bounds else [0.0, 0.0, 1.0, 1.0],
+            "raw_boundary_point_count": len(raw_local_points),
+            "local_boundary_points": local_points,
+            "mask_size": [],
+            "mask_spans": [],
+            "mask_component_count": _mask_component_count(full_mask),
+            "mask_area_ratio_image": round(float(np.count_nonzero(full_mask) / max(1, context.width * context.height)), 6),
+            "local_mask_foreground_pixels": 0,
+            "mask_bbox": _mask_bbox(full_mask),
+            "bbox": bbox,
+            "coarse_bbox": coarse_bbox,
+            "positive_point": positive_point,
+            "boundary_points": points,
+        }
+    raise ValueError("Grounding candidate must include boundary_points.")
 
 
 def build_harness_constraints(step: dict[str, Any], parent_output: dict[str, Any] | None) -> str:
     config = _harness_config(step)
     lines: list[str] = []
+    target_scope = str(config.get("target_scope", "") or "").strip()
+    if target_scope:
+        lines.append(f"- Target scope: {target_scope}.")
     evidence_mode = str(config.get("evidence_mode", "") or "").strip()
     if evidence_mode:
         lines.append(f"- Evidence mode: {evidence_mode}.")
@@ -975,7 +980,7 @@ def build_harness_constraints(step: dict[str, Any], parent_output: dict[str, Any
         lines.append(f"- Parent label: {config['parent_label']}.")
     spatial_priors = _string_list(config.get("spatial_priors"))
     if spatial_priors:
-        lines.append(f"- Spatial priors: {', '.join(spatial_priors)}.")
+        lines.append(f"- Spatial priors (soft hints, not hard constraints): {', '.join(spatial_priors)}.")
     sanity_checks = _string_list(config.get("sanity_checks"))
     if sanity_checks:
         lines.append(f"- Sanity checks: {', '.join(sanity_checks)}.")
@@ -985,219 +990,549 @@ def build_harness_constraints(step: dict[str, Any], parent_output: dict[str, Any
     return "\n".join(lines)
 
 
-def _coarse_prompt(
+def _grounding_task_contract(
     *,
     target_label: str,
     step: dict[str, Any],
-    prompt_variant: int,
     parent_bbox: list[float] | None,
+    relationship: str,
+) -> dict[str, str]:
+    tool_type = str((step.get("tool_config") or {}).get("tool_type") or "").strip().lower()
+    relation = _normalize_relation_name(relationship)
+    if parent_bbox and relation:
+        task_kind = "localize_relative_region"
+    elif tool_type == "evidence_vlm":
+        task_kind = "locate_primary_target"
+    else:
+        task_kind = "localize_supporting_evidence"
+    if relation in {"inside_parent", "within_parent", "part_of_parent", "deep_to_parent", "posterior_to_parent", "adjacent_to_parent", "overlaps_parent"}:
+        target_scope = "relative_region"
+    else:
+        target_scope = str((step.get("target_scope") or (step.get("tool_config") or {}).get("target_scope") or "").strip() or "entity_or_local_region")
+    evidence_mode = str((step.get("evidence_mode") or (step.get("tool_config") or {}).get("evidence_mode") or "").strip() or "boundary_points")
+    return {
+        "task_kind": task_kind,
+        "target_scope": target_scope,
+        "relationship": relation or "none",
+        "evidence_mode": evidence_mode,
+        "target_label": target_label,
+    }
+
+
+def _orientation(value: list[float], other: list[float], third: list[float]) -> int:
+    cross = (other[1] - value[1]) * (third[0] - other[0]) - (other[0] - value[0]) * (third[1] - other[1])
+    if abs(cross) < 1e-9:
+        return 0
+    return 1 if cross > 0 else 2
+
+
+def _on_segment(value: list[float], other: list[float], third: list[float]) -> bool:
+    return (
+        min(value[0], third[0]) - 1e-9 <= other[0] <= max(value[0], third[0]) + 1e-9
+        and min(value[1], third[1]) - 1e-9 <= other[1] <= max(value[1], third[1]) + 1e-9
+    )
+
+
+def _segments_intersect(a1: list[float], a2: list[float], b1: list[float], b2: list[float]) -> bool:
+    o1 = _orientation(a1, a2, b1)
+    o2 = _orientation(a1, a2, b2)
+    o3 = _orientation(b1, b2, a1)
+    o4 = _orientation(b1, b2, a2)
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and _on_segment(a1, b1, a2):
+        return True
+    if o2 == 0 and _on_segment(a1, b2, a2):
+        return True
+    if o3 == 0 and _on_segment(b1, a1, b2):
+        return True
+    if o4 == 0 and _on_segment(b1, a2, b2):
+        return True
+    return False
+
+
+def _has_self_intersection(points: list[list[float]]) -> bool:
+    total = len(points)
+    if total < 4:
+        return False
+    edges = [(points[index], points[(index + 1) % total]) for index in range(total)]
+    for index, first in enumerate(edges):
+        for other_index in range(index + 1, total):
+            if other_index == index:
+                continue
+            if other_index == (index + 1) % total:
+                continue
+            if index == 0 and other_index == total - 1:
+                continue
+            second = edges[other_index]
+            if _segments_intersect(first[0], first[1], second[0], second[1]):
+                return True
+    return False
+
+
+def _boundary_anchor_checks(points: list[list[float]]) -> list[str]:
+    failed: list[str] = []
+    if len(points) < 4:
+        return failed
+    top_index = min(range(len(points)), key=lambda index: (points[index][1], points[index][0]))
+    if top_index != 0:
+        failed.append("first_point_not_topmost")
+    centroid = polygon_centroid(points)
+    quadrants: set[tuple[int, int]] = set()
+    for point in points:
+        x_side = 1 if point[0] >= centroid[0] else -1
+        y_side = 1 if point[1] >= centroid[1] else -1
+        quadrants.add((x_side, y_side))
+    if len(quadrants) < 4:
+        failed.append("boundary_quadrant_coverage_incomplete")
+    return failed
+
+
+def _boundary_angle_checks(points: list[list[float]]) -> list[str]:
+    failed: list[str] = []
+    centroid = polygon_centroid(points)
+    angles: list[float] = []
+    for point in points:
+        angle = math.atan2(point[1] - centroid[1], point[0] - centroid[0])
+        if angle < 0:
+            angle += 2 * math.pi
+        angles.append(angle)
+    if not angles:
+        return failed
+    ordered = sorted(angles)
+    gaps = [ordered[index + 1] - ordered[index] for index in range(len(ordered) - 1)]
+    gaps.append((ordered[0] + 2 * math.pi) - ordered[-1])
+    max_gap = max(gaps)
+    if max_gap > math.pi * 0.85:
+        failed.append("boundary_angle_coverage_incomplete")
+    signed_area = polygon_signed_area(points)
+    if signed_area >= 0:
+        failed.append("boundary_not_clockwise")
+    return failed
+
+
+def _boundary_global_prompt(
+    *,
+    target_label: str,
+    step: dict[str, Any],
+    parent_bbox: list[float] | None,
+    relationship: str,
+    views: list[HarnessView],
 ) -> str:
-    templates = [
-        "Find the full visible boundary of the requested target.",
-        "Localize the requested target by tracing its outer contour.",
-        "Identify the target region and include its top, bottom, left, and right extremes.",
-    ]
-    parent_text = f"\nParent normalized bbox: {parent_bbox}" if parent_bbox else ""
-    contrast_expectation = _contrast_expectation(step, target_label)
-    contrast_rule = ""
-    if contrast_expectation == "dark":
-        contrast_rule = "- If this target is dark or hypoechoic, place the contour on the dark structure itself, not on surrounding tissue or below-lesion artifact.\n"
-    elif contrast_expectation == "bright":
-        contrast_rule = "- If this target is bright relative to surrounding tissue, place the contour on the brighter evidence region itself.\n"
+    contract = _grounding_task_contract(
+        target_label=target_label,
+        step=step,
+        parent_bbox=parent_bbox,
+        relationship=relationship,
+    )
+    parent_text = f"- parent_bbox: {parent_bbox}" if parent_bbox else "- parent_bbox: none"
+    selectable_views = [view for view in views if view.selectable]
+    image_views = [view for view in views if view.data_url]
+    preferred_view = "coordinate-full" if any(view.name == "coordinate-full" for view in selectable_views) else selectable_views[0].name
+    view_names = {view.name for view in selectable_views}
+    if {"original-full", "coordinate-full"}.issubset(view_names):
+        coordinate_guidance = (
+            "The attached images are two views of the same full image with identical dimensions and identical normalized coordinates.\n"
+            "Use original-full to recognize the target. Use coordinate-full only to calibrate x/y locations.\n"
+            "Trace boundary_points in this full-image coordinate frame; do not use crop-local or display-local coordinates."
+        )
+    elif "coordinate-full" in view_names:
+        coordinate_guidance = (
+            "The attached image is the full image with coordinate tick marks.\n"
+            "Use it to recognize the target and calibrate x/y locations in the same full-image coordinate frame.\n"
+            "Trace boundary_points in this full-image coordinate frame; do not use crop-local or display-local coordinates."
+        )
+    else:
+        coordinate_guidance = (
+            "The attached image is the original full image.\n"
+            "Trace boundary_points in this full-image coordinate frame; do not use crop-local or display-local coordinates."
+        )
+    view_lines = "\n".join(f"- {view.name}: {view.label}" for view in selectable_views)
+    image_lines = "\n".join(f"- {view.name}: {view.label}" for view in image_views)
     return dedent(
         f"""
-        {templates[prompt_variant % len(templates)]}
+        You are the executor-side grounding model for a clinical agent workflow.
+        You are not diagnosing. You are executing a single visual localization task.
 
-        Target: {target_label}
-        Step action: {step.get('action') or ''}
+        Task contract:
+        - target_label: {contract['target_label']}
+        - step_action: {step.get('action') or ''}
+        - task_kind: {contract['task_kind']}
+        - target_scope: {contract['target_scope']}
+        - relationship: {contract['relationship']}
+        - evidence_mode: {contract['evidence_mode']}
+        - output_contract: selected_view_plus_roi_boundary_points
+        - coordinate_frame: normalized coordinates of the selected view
         {parent_text}
 
-        The image has visible border rulers with 8 subdivisions per side. Use the rulers only as a spatial aid; do not trace the frame or labels.
+        Binding rule:
+        - target_label is the exact object or evidence region to localize.
+        - step_action gives downstream context only; do not expand the ROI to extra concepts mentioned in step_action.
+
+        Coordinate view:
+        {view_lines}
+
+        Images attached to this request:
+        {image_lines}
+
+        {coordinate_guidance}
+
+        {_knowledge_decomposition(
+            target_label=target_label,
+            step=step,
+            relationship=contract["relationship"],
+            parent_bbox=parent_bbox,
+        )}
+
+        {_analysis_protocol()}
+
+        {_extent_protocol(
+            task_kind=contract["task_kind"],
+            target_scope=contract["target_scope"],
+            relationship=contract["relationship"],
+        )}
+
+        Soft-prior handling:
+        - Spatial priors are secondary hints.
+        - If a soft prior conflicts with the visible image evidence, trust the visible image evidence.
 
         Return ONLY JSON:
         {{
+          "selected_view": "{preferred_view}",
           "conclusion": "localized|not_visible|uncertain",
           "confidence": 0.0,
-          "rationale": "short visual evidence",
-          "boundary_points": [[x,y], ...],
-          "positive_point": [x,y],
-          "coarse_bbox": [x1,y1,x2,y2]
+          "rationale": "short visual reason",
+          "boundary_points": [[x, y], [x, y]],
+          "positive_point": [x, y],
+          "coarse_bbox": [x1, y1, x2, y2]
         }}
 
         Rules:
-        - Coordinates are normalized to the full shown image.
-        - boundary_points must contain 8 to 20 points around the actual visible target boundary.
-        - Include points near the target's top, bottom, left, and right extremes.
-        - The bbox must tightly cover the same boundary.
-        - If multiple plausible structures are visible, choose the single dominant target requested by the task rather than a small satellite, duct, vessel, or artifact.
-        - Do not outline labels, measurement text, ruler marks, or background.
-        {contrast_rule}\
-        - Rationale should describe visual appearance, not crop-relative quadrant language.
+        - Prefer selected_view="{preferred_view}" because it has the coordinate guide; the coordinate frame is identical to original-full.
+        - selected_view must be exactly one of: {', '.join(view.name for view in selectable_views)}.
+        - Coordinate convention: x increases left to right; y increases top to bottom; [0,0] is the top-left corner; [1,1] is the bottom-right corner.
+        - Use the full image to refine the exact spatial extent of the requested target.
+        - selected_view identifies the image in which you traced the ROI boundary.
+        - boundary_points must be normalized floats in [0, 1] relative to the selected_view image.
+        - positive_point must be a normalized point clearly inside the same target.
+        - coarse_bbox must tightly cover the same target and all returned boundary points.
+        {_segmentation_boundary_rules()}
+        - Do not return only a circle, ellipse, or generic box approximation.
+        - If multiple candidates exist, choose the single dominant target requested by the step.
+        - Do not point to labels, ruler marks, measurement text, caliper text, or empty background.
+        - Do not output mask rows or a point-only answer.
+        - The polygon formed by boundary_points must correspond to the visible target extent in the selected_view coordinate frame.
         {build_harness_constraints(step, None)}
         """
     ).strip()
 
 
-def _refine_prompt(
+def _bbox_global_prompt(
     *,
     target_label: str,
     step: dict[str, Any],
-    crop_context: CropContext,
-    prompt_variant: int,
-    failed_checks: list[str] | None = None,
+    parent_bbox: list[float] | None,
+    relationship: str,
+    views: list[HarnessView],
 ) -> str:
-    repair_text = ""
-    if failed_checks:
-        repair_text = f"\nPrevious localization failed these checks: {', '.join(failed_checks)}. Correct the localization."
-    contrast_expectation = _contrast_expectation(step, target_label)
-    contrast_rule = ""
-    if contrast_expectation == "dark":
-        contrast_rule = "- Put the contour on the darker target and avoid adjacent brighter tissue.\n"
-    elif contrast_expectation == "bright":
-        contrast_rule = "- Put the contour on the brighter target evidence region and avoid the darker lesion itself.\n"
+    contract = _grounding_task_contract(
+        target_label=target_label,
+        step=step,
+        parent_bbox=parent_bbox,
+        relationship=relationship,
+    )
+    parent_text = f"- parent_bbox: {parent_bbox}" if parent_bbox else "- parent_bbox: none"
+    selectable_views = [view for view in views if view.selectable]
+    preferred_view = "coordinate-full" if any(view.name == "coordinate-full" for view in selectable_views) else selectable_views[0].name
+    view_names = {view.name for view in selectable_views}
+    if {"original-full", "coordinate-full"}.issubset(view_names):
+        coordinate_guidance = (
+            "The attached views share the same full-image coordinate frame.\n"
+            "Use original-full to recognize the evidence region and coordinate-full only to calibrate the bbox coordinates."
+        )
+    elif "coordinate-full" in view_names:
+        coordinate_guidance = (
+            "The attached image is the full image with coordinate tick marks.\n"
+            "Use it to recognize the evidence region and calibrate the bbox coordinates."
+        )
+    else:
+        coordinate_guidance = (
+            "The attached image is the original full image.\n"
+            "Use it to recognize the evidence region and estimate normalized bbox coordinates."
+        )
+    view_lines = "\n".join(f"- {view.name}: {view.label}" for view in selectable_views)
     return dedent(
         f"""
-        Refine the target boundary in this cropped medical image.
+        You are the executor-side grounding model for a clinical agent workflow.
+        You are not diagnosing. You are executing one qualitative evidence localization task.
 
-        Target: {target_label}
-        Step action: {step.get('action') or ''}
-        Crop box in the original image: {crop_context.crop_box_norm}
-        Prompt variant: {prompt_variant}
-        {repair_text}
+        Task contract:
+        - target_label: {contract['target_label']}
+        - step_action: {step.get('action') or ''}
+        - task_kind: qualitative_evidence_check
+        - target_scope: {contract['target_scope']}
+        - relationship: {contract['relationship']}
+        - evidence_mode: bbox_only
+        - output_contract: selected_view_plus_bbox
+        - coordinate_frame: normalized coordinates of the selected view
+        {parent_text}
+
+        Coordinate view:
+        {view_lines}
+
+        {coordinate_guidance}
+
+        Evidence bbox principle:
+        - This is not a segmentation task.
+        - Draw one tight bounding box around the single most relevant visual evidence region for this qualitative finding.
+        - If the step checks an attribute of a parent target, box the visible subregion or whole parent area that supports the conclusion.
+        - Do not output boundary_points, polygons, masks, point markers, or multiple boxes.
 
         Return ONLY JSON:
         {{
-          "conclusion": "localized|not_visible|uncertain",
+          "selected_view": "{preferred_view}",
+          "conclusion": "Yes|No|Uncertain|not_visible",
           "confidence": 0.0,
-          "rationale": "short visual evidence",
-          "boundary_points": [[x,y], ...],
-          "positive_point": [x,y],
-          "coarse_bbox": [x1,y1,x2,y2]
+          "rationale": "short visual reason tied to the boxed region",
+          "bbox": [x1, y1, x2, y2]
         }}
 
         Rules:
-        - Coordinates are normalized to THIS CROP, not the original image.
-        - boundary_points must contain 8 to 20 points around the actual visible target boundary.
-        - If multiple plausible structures are visible, delineate the dominant requested target, not a secondary small focus.
-        - Trace the image target boundary, not the border ruler, annotation text, or the previous approximate box.
-        - If the target is a lesion, put the boundary on the lesion-tissue transition.
-        - If the target is posterior acoustic change, place it deep to the parent lesion and aligned with it.
-        {contrast_rule}\
-        - If a green parent contour is visible, use it as context and delineate only the requested child target.
-        - Rationale should describe visual appearance, not crop-relative quadrant language.
+        - Prefer selected_view="{preferred_view}" because it has the coordinate guide; the coordinate frame is identical to original-full.
+        - selected_view must be exactly one of: {', '.join(view.name for view in selectable_views)}.
+        - bbox must be normalized floats in [0, 1] relative to the selected_view image.
+        - bbox must be tight enough to let a human check the evidence, but large enough to include the relevant visible context.
+        - If multiple candidate evidence regions exist, choose the dominant one most relevant to target_label.
+        - Do not point to labels, ruler marks, measurement text, caliper text, or empty background.
+        {build_harness_constraints(step, None)}
         """
     ).strip()
 
 
-def _candidate_failure_summary(candidates: list[dict[str, Any]]) -> str:
-    if not candidates:
-        return "no candidates were generated"
-    parts = []
-    for index, candidate in enumerate(candidates, start=1):
-        validation = candidate.get("validation") or {}
-        failed = validation.get("failed_checks") or ["unknown_failure"]
-        parts.append(f"sample {index}: {', '.join(str(item) for item in failed)}")
-    return "; ".join(parts)
+def _extract_bbox_object(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("BBox grounding response must be a JSON object.")
+    nested = payload.get("grounding") if isinstance(payload.get("grounding"), dict) else {}
+    return {
+        "bbox": payload.get("bbox", payload.get("coarse_bbox", nested.get("bbox", nested.get("coarse_bbox")))),
+        "selected_view": payload.get("selected_view", nested.get("selected_view")),
+        "conclusion": payload.get("conclusion", ""),
+        "confidence": payload.get("confidence", nested.get("confidence")),
+        "rationale": payload.get("rationale", nested.get("rationale", "")),
+    }
 
 
-def _run_candidate_sample(
+def _normalize_bbox_candidate(payload: dict[str, Any], *, views: list[HarnessView]) -> dict[str, Any]:
+    obj = _extract_bbox_object(payload)
+    selected_view = _resolve_selected_view(obj.get("selected_view"), views)
+    local_bbox = normalize_bbox(obj.get("bbox"))
+    top_left = map_point_from_view([local_bbox[0], local_bbox[1]], selected_view)
+    bottom_right = map_point_from_view([local_bbox[2], local_bbox[3]], selected_view)
+    bbox = normalize_bbox([top_left[0], top_left[1], bottom_right[0], bottom_right[1]])
+    return {
+        "conclusion": str(obj.get("conclusion") or "").strip() or "Uncertain",
+        "confidence": _require_confidence(obj, label="BBox grounding candidate"),
+        "rationale": str(obj.get("rationale") or "").strip(),
+        "selected_view": selected_view.name,
+        "selected_view_label": selected_view.label,
+        "selected_view_bounds": list(selected_view.bounds) if selected_view.bounds else [0.0, 0.0, 1.0, 1.0],
+        "local_bbox": local_bbox,
+        "bbox": bbox,
+    }
+
+
+def _validate_bbox_candidate(
     *,
-    request_json: JsonImageRequester,
-    context: HarnessImage,
-    grid_data_url: str,
-    step: dict[str, Any],
-    target_label: str,
+    candidate: dict[str, Any],
+    relationship: str,
     parent_bbox: list[float] | None,
-    parent_mask: np.ndarray | None,
-    sample_idx: int,
-    repair_rounds: int,
-    guided_bbox: list[float] | None = None,
-    guided_proposal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    relationship = _normalize_relation_name(_harness_config(step).get("relationship"))
-    if guided_bbox is None:
-        coarse_raw = request_json(
-            grid_data_url,
-            _coarse_prompt(target_label=target_label, step=step, prompt_variant=sample_idx, parent_bbox=parent_bbox),
-            1800,
-            "You localize medical image evidence. Return only strict JSON.",
-        )
-        coarse = _normalize_candidate(coarse_raw)
-        focus_bbox = coarse["bbox"]
+    failed: list[str] = []
+    warnings: list[str] = []
+    bbox = candidate["bbox"]
+    bbox_width = bbox[2] - bbox[0]
+    bbox_height = bbox[3] - bbox[1]
+    bbox_area = bbox_width * bbox_height
+    if bbox_width < 0.005:
+        failed.append("bbox_width_too_small")
+    if bbox_height < 0.005:
+        failed.append("bbox_height_too_small")
+    if bbox_area < 0.00002:
+        failed.append("bbox_area_too_small")
+    if bbox_area > 0.85:
+        failed.append("bbox_area_too_large")
+    if str(candidate.get("conclusion") or "").strip().lower() == "not_visible":
+        failed.append("target_not_visible")
+    if parent_bbox:
+        relation = _normalize_relation_name(relationship)
+        intersection_width = max(0.0, min(bbox[2], parent_bbox[2]) - max(bbox[0], parent_bbox[0]))
+        intersection_height = max(0.0, min(bbox[3], parent_bbox[3]) - max(bbox[1], parent_bbox[1]))
+        intersection_area = intersection_width * intersection_height
+        if relation in {"inside_parent", "within_parent", "part_of_parent", "same_target", "same_parent_target"}:
+            if not (
+                parent_bbox[0] <= bbox[0] <= bbox[2] <= parent_bbox[2]
+                and parent_bbox[1] <= bbox[1] <= bbox[3] <= parent_bbox[3]
+            ):
+                failed.append("bbox_not_inside_parent")
+        if relation in {"adjacent_to_parent", "overlaps_parent"} and intersection_area <= 0:
+            failed.append("bbox_not_touching_parent")
+        if relation in {"deep_to_parent", "posterior_to_parent"}:
+            if bbox[3] <= parent_bbox[3]:
+                failed.append("bbox_not_deep_to_parent")
+            if intersection_width <= 0:
+                failed.append("bbox_not_horizontally_aligned_with_parent")
+        warnings.append(f"bbox_parent_overlap_area:{intersection_area:.6f}")
+    return {
+        "valid": not failed,
+        "failed_checks": failed,
+        "warnings": warnings,
+        "area_ratio_image": round(bbox_area, 6),
+    }
+
+
+def _validate_lightweight_candidate(
+    *,
+    context: HarnessImage,
+    candidate: dict[str, Any],
+    relationship: str,
+    parent_bbox: list[float] | None,
+    parent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    failed: list[str] = []
+    warnings: list[str] = []
+    points = candidate["boundary_points"]
+    bbox = candidate["bbox"]
+    positive_point = candidate["positive_point"]
+    coarse_bbox = candidate["coarse_bbox"]
+    raw_point_count = int(candidate.get("raw_boundary_point_count") or len(points))
+    candidate_mask = _mask_from_polygon_points(width=context.width, height=context.height, points=points)
+    candidate_area_px = int(np.count_nonzero(candidate_mask))
+    mask_component_count = int(candidate.get("mask_component_count") or 0)
+    if mask_component_count > 1:
+        warnings.append(f"segmentation_has_multiple_components:{mask_component_count}")
+    if float(candidate.get("mask_area_ratio_image") or 0.0) <= 0.0:
+        failed.append("segmentation_mask_empty")
+
+    if raw_point_count < 8:
+        failed.append(f"insufficient_raw_boundary_points:received_{raw_point_count}")
+    elif raw_point_count < 24:
+        warnings.append(f"raw_boundary_point_density:received_{raw_point_count}")
+    if len(points) != REQUIRED_BOUNDARY_POINT_COUNT:
+        failed.append(f"normalized_boundary_point_count_invalid:received_{len(points)}")
+    unique_points = {(round(point[0], 4), round(point[1], 4)) for point in points}
+    if len(unique_points) < 8:
+        failed.append("boundary_points_not_diverse")
+    failed.extend(_boundary_anchor_checks(points))
+    failed.extend(_boundary_angle_checks(points))
+    if _has_self_intersection(points):
+        failed.append("boundary_self_intersection")
+
+    positive_x = int(round(positive_point[0] * max(1, context.width - 1)))
+    positive_y = int(round(positive_point[1] * max(1, context.height - 1)))
+    if not inside_bbox(positive_point, bbox):
+        failed.append("positive_point_outside_boundary_bbox")
+    if 0 <= positive_y < candidate_mask.shape[0] and 0 <= positive_x < candidate_mask.shape[1]:
+        if candidate_mask[positive_y, positive_x] == 0:
+            warnings.append("positive_point_outside_boundary_polygon")
     else:
-        coarse = {
-            "bbox": normalize_bbox(guided_bbox),
-            "confidence": 1.0,
-            "rationale": "guided proposal",
-        }
-        focus_bbox = coarse["bbox"]
-    crop_context = _crop_context_from_bbox(
-        context,
-        parent_bbox if parent_bbox and relationship in {"inside_parent", "within_parent", "part_of_parent", "deep_to_parent", "posterior_to_parent", "adjacent_to_parent", "overlaps_parent"} else focus_bbox,
-        label=f"crop sample {sample_idx + 1}",
-        pad_ratio=2.4,
-        parent_bbox=parent_bbox,
-        parent_mask=parent_mask,
-        relationship=relationship,
-    )
-    refined_raw = request_json(
-        crop_context.data_url,
-        _refine_prompt(target_label=target_label, step=step, crop_context=crop_context, prompt_variant=sample_idx),
-        1800,
-        "You refine medical image evidence localization. Return only strict JSON.",
-    )
-    candidate = _normalize_candidate(refined_raw, crop_context=crop_context)
-    candidate["sample_id"] = sample_idx
-    if guided_bbox is not None:
-        candidate["guided_bbox"] = normalize_bbox(guided_bbox)
-    if guided_proposal is not None:
-        candidate["guided_proposal_id"] = guided_proposal.get("proposal_id")
-        candidate["guided_proposal_score"] = guided_proposal.get("score")
-    validation = _validate_candidate(
-        context=context,
-        candidate=candidate,
-        step=step,
-        target_label=target_label,
-        parent_bbox=parent_bbox,
-        parent_mask=parent_mask,
-    )
-    for repair_idx in range(max(0, repair_rounds)):
-        if validation["valid"]:
-            break
-        repair_crop = _crop_context_from_bbox(
-            context,
-            candidate["bbox"],
-            label=f"repair sample {sample_idx + 1}",
-            pad_ratio=3.0,
-            parent_bbox=parent_bbox,
-            parent_mask=parent_mask,
-            relationship=relationship,
-        )
-        repaired_raw = request_json(
-            repair_crop.data_url,
-            _refine_prompt(
-                target_label=target_label,
-                step=step,
-                crop_context=repair_crop,
-                prompt_variant=sample_idx + 100 + repair_idx,
-                failed_checks=validation.get("failed_checks", []),
-            ),
-            1800,
-            "You repair failed medical image evidence localization. Return only strict JSON.",
-        )
-        repaired = _normalize_candidate(repaired_raw, crop_context=repair_crop)
-        repaired["sample_id"] = sample_idx
-        repaired["repaired"] = True
-        validation = _validate_candidate(
-            context=context,
-            candidate=repaired,
-            step=step,
-            target_label=target_label,
-            parent_bbox=parent_bbox,
-            parent_mask=parent_mask,
-        )
-        candidate = repaired
-    return candidate
+        failed.append("positive_point_outside_image")
+
+    area = polygon_area(points)
+    area_ratio_image = float(candidate_area_px / max(1, context.width * context.height))
+    if candidate_area_px <= 3 or area_ratio_image < 0.00002:
+        failed.append("target_area_too_small")
+    if area_ratio_image > 0.85:
+        failed.append("target_area_too_large")
+    bbox_width = bbox[2] - bbox[0]
+    bbox_height = bbox[3] - bbox[1]
+    if bbox_width < 0.01:
+        failed.append("target_width_too_small")
+    if bbox_height < 0.01:
+        failed.append("target_height_too_small")
+    fill_ratio = area_ratio_image / max(bbox_width * bbox_height, 1e-6)
+    if fill_ratio < 0.15:
+        failed.append("boundary_bbox_fill_too_sparse")
+    tolerance = 0.02
+    if (
+        bbox[0] < coarse_bbox[0] - tolerance
+        or bbox[1] < coarse_bbox[1] - tolerance
+        or bbox[2] > coarse_bbox[2] + tolerance
+        or bbox[3] > coarse_bbox[3] + tolerance
+    ):
+        failed.append("coarse_bbox_does_not_cover_boundary")
+    coarse_consistency_iou = bbox_iou(bbox, coarse_bbox)
+    if coarse_consistency_iou < 0.25:
+        failed.append("coarse_bbox_not_consistent_with_boundary")
+    elif coarse_consistency_iou < 0.5:
+        warnings.append(f"coarse_bbox_boundary_iou_low:{coarse_consistency_iou:.4f}")
+
+    parent = parent or {}
+    if parent_bbox:
+        relation = _normalize_relation_name(relationship)
+        parent_mask = _parent_mask_from_grounding(width=context.width, height=context.height, parent=parent)
+        intersection_width = max(0.0, min(bbox[2], parent_bbox[2]) - max(bbox[0], parent_bbox[0]))
+        intersection_height = max(0.0, min(bbox[3], parent_bbox[3]) - max(bbox[1], parent_bbox[1]))
+        intersection_area = intersection_width * intersection_height
+        bbox_area = max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]), 1e-6)
+        parent_area = max((parent_bbox[2] - parent_bbox[0]) * (parent_bbox[3] - parent_bbox[1]), 1e-6)
+        overlap_ratio = intersection_area / min(bbox_area, parent_area)
+        horizontal_overlap = max(0.0, min(bbox[2], parent_bbox[2]) - max(bbox[0], parent_bbox[0]))
+        parent_width = max(parent_bbox[2] - parent_bbox[0], 1e-6)
+        if parent_mask is not None:
+            inside_mask = cv2.bitwise_and(candidate_mask, parent_mask)
+            inside_area = int(np.count_nonzero(inside_mask))
+            parent_mask_area = int(np.count_nonzero(parent_mask))
+            validation_inside_fraction = float(inside_area / max(1, candidate_area_px))
+            validation_area_ratio_to_parent = float(candidate_area_px / max(1, parent_mask_area))
+            validation_iou = _mask_iou(candidate_mask, parent_mask)
+            if relation in {"inside_parent", "within_parent", "part_of_parent"}:
+                if validation_inside_fraction < 0.98:
+                    failed.append("mask_not_inside_parent")
+                if not _centroid_inside_parent(candidate_mask, parent_mask):
+                    failed.append("mask_centroid_outside_parent")
+            if relation in {"same_target", "same_parent_target"} and validation_iou < 0.45:
+                failed.append("mask_not_overlapping_parent_target")
+            if relation in {"adjacent_to_parent", "overlaps_parent"} and inside_area <= 0:
+                failed.append("mask_not_touching_parent")
+            warnings.extend(
+                [
+                    f"inside_parent_fraction:{validation_inside_fraction:.4f}",
+                    f"area_ratio_to_parent:{validation_area_ratio_to_parent:.4f}",
+                    f"mask_iou_to_parent:{validation_iou:.4f}",
+                ]
+            )
+        if relation in {"inside_parent", "within_parent", "part_of_parent"}:
+            for boundary_point in points:
+                if not inside_bbox(boundary_point, parent_bbox):
+                    failed.append("boundary_outside_parent")
+                    break
+            if not (
+                parent_bbox[0] <= bbox[0] <= bbox[2] <= parent_bbox[2]
+                and parent_bbox[1] <= bbox[1] <= bbox[3] <= parent_bbox[3]
+            ):
+                failed.append("target_not_inside_parent")
+        if relation in {"deep_to_parent", "posterior_to_parent"}:
+            if bbox[1] < parent_bbox[1]:
+                warnings.append("target_extends_above_parent")
+            if bbox[3] <= parent_bbox[3]:
+                failed.append("target_not_deep_to_parent")
+            if horizontal_overlap < 0.2 * parent_width:
+                failed.append("target_not_horizontally_aligned_with_parent")
+        if relation in {"same_target", "same_parent_target"} and overlap_ratio < 0.5:
+            failed.append("target_not_overlapping_parent_target")
+        if relation in {"adjacent_to_parent", "overlaps_parent"} and intersection_area <= 0:
+            failed.append("target_not_touching_parent")
+
+    return {
+        "valid": not failed,
+        "failed_checks": failed,
+        "warnings": warnings,
+        "area_ratio_image": round(area_ratio_image, 6),
+        "bbox_fill_ratio": round(fill_ratio, 6),
+        "coarse_bbox_boundary_iou": round(coarse_consistency_iou, 6),
+        "area_px": candidate_area_px,
+        "analysis_image_size": [context.width, context.height],
+    }
 
 
 def run_vlm_grounding_harness(
@@ -1209,149 +1544,159 @@ def run_vlm_grounding_harness(
     parent_output: dict[str, Any] | None = None,
     n_samples: int = 3,
     repair_rounds: int = 1,
+    require_boundary: bool = True,
 ) -> dict[str, Any]:
+    del n_samples, repair_rounds, require_boundary
     context = prepare_harness_image(image_payload)
     parent = parent_grounding(parent_output)
     parent_bbox = normalize_bbox(parent["bbox"]) if parent.get("bbox") else None
-    parent_mask = _parent_mask_from_grounding(parent_output, width=context.width, height=context.height)
-    guided_proposals: list[dict[str, Any]] = []
-    if _is_primary_dark_lesion_step(step, target_label, parent_mask):
-        guided_proposals = _generate_dark_component_proposals(context, step=step, target_label=target_label)
-        if not guided_proposals:
-            raise ValueError("Primary lesion proposal harness did not find any plausible dark target candidates.")
-    grid_data_url = _image_to_data_url(_draw_grid(context.image, label="full image ruler"))
-    candidates: list[dict[str, Any]] = []
-
-    for sample_idx in range(max(1, n_samples)):
-        guided_proposal = guided_proposals[min(sample_idx, len(guided_proposals) - 1)] if guided_proposals else None
-        try:
-            candidate = _run_candidate_sample(
-                request_json=request_json,
-                context=context,
-                grid_data_url=grid_data_url,
-                step=step,
+    relationship = str(step.get("relationship") or "")
+    views = _build_grounding_views(context, parent_bbox=parent_bbox, relationship=relationship)
+    image_views = [view for view in views if view.data_url]
+    candidate = _normalize_candidate(
+        request_json(
+            [{"name": view.name, "label": view.label, "data_url": view.data_url} for view in image_views],
+            _boundary_global_prompt(
                 target_label=target_label,
+                step=step,
                 parent_bbox=parent_bbox,
-                parent_mask=parent_mask,
-                sample_idx=sample_idx,
-                repair_rounds=repair_rounds,
-                guided_bbox=guided_proposal["bbox"] if guided_proposal is not None else None,
-                guided_proposal=guided_proposal,
-            )
-        except Exception as exc:
-            candidate = {
-                "sample_id": sample_idx,
-                "validation": {
-                    "valid": False,
-                    "failed_checks": [f"candidate_exception:{type(exc).__name__}:{exc}"],
-                },
-            }
-        candidates.append(candidate)
-
-    valid_candidates = [candidate for candidate in candidates if (candidate.get("validation") or {}).get("valid")]
-    if not valid_candidates:
-        raise ValueError(f"Grounding harness rejected all VLM candidates: {_candidate_failure_summary(candidates)}")
-
-    iou_matrix: list[list[float]] = []
-    for first in valid_candidates:
-        row: list[float] = []
-        for second in valid_candidates:
-            row.append(_mask_iou_array(first["mask_array"], second["mask_array"]))
-        iou_matrix.append(row)
-
-    scores: list[float] = []
-    dominant_target = _prefers_single_dominant_target(step, target_label)
-    max_area_ratio = max(float((candidate.get("validation") or {}).get("area_ratio_image") or 0.0) for candidate in valid_candidates) or 1.0
-    proposal_guided_mode = any(candidate.get("guided_proposal_id") for candidate in valid_candidates)
-    consensus_weight = 0.45 if proposal_guided_mode else 1.0
-    for idx, candidate in enumerate(valid_candidates):
-        peer_ious = [score for jdx, score in enumerate(iou_matrix[idx]) if jdx != idx]
-        mean_iou = float(sum(peer_ious) / len(peer_ious)) if peer_ious else 1.0
-        validation = candidate.get("validation") or {}
-        contrast = validation.get("contrast") or {}
-        edge_alignment = validation.get("edge_alignment") or {}
-        area_ratio_value = float(validation.get("area_ratio_image") or 0.0)
-        contrast_bonus = 0.0
-        if contrast.get("available") and _needs_dark_target_validation(step, target_label):
-            contrast_bonus = min(0.25, max(0.0, -float(contrast["target_minus_surrounding"]) / 120.0))
-        edge_bonus = 0.0
-        if edge_alignment.get("available"):
-            edge_bonus = min(0.2, max(0.0, (float(edge_alignment["boundary_vs_image"]) - 1.0) / 5.0))
-        area_bonus = 0.0
-        if dominant_target:
-            area_bonus = min(0.18, 0.18 * area_ratio_value / max(max_area_ratio, 1e-6))
-        proposal_bonus = min(0.25, max(0.0, float(candidate.get("guided_proposal_score") or 0.0) / 4.0))
-        scores.append(consensus_weight * mean_iou + 0.05 * float(candidate.get("confidence") or 0.0) + contrast_bonus + edge_bonus + area_bonus + proposal_bonus)
-        candidate["selection_score"] = round(scores[-1], 6)
-        candidate["mean_peer_iou"] = round(mean_iou, 6)
-
-    primary_index = max(range(len(valid_candidates)), key=lambda index: scores[index])
-    primary = valid_candidates[primary_index]
+                relationship=relationship,
+                views=views,
+            ),
+            2200,
+            "You localize one medical image target for downstream agent execution. Return only strict JSON.",
+        ),
+        views=views,
+        context=context,
+    )
+    validation = _validate_lightweight_candidate(
+        context=context,
+        candidate=candidate,
+        relationship=relationship,
+        parent_bbox=parent_bbox,
+        parent=parent,
+    )
+    if str(candidate.get("conclusion") or "").strip().lower() == "not_visible":
+        validation["valid"] = False
+        validation.setdefault("failed_checks", []).append("target_not_visible")
+    if not validation["valid"]:
+        raise ValueError(f"Grounding validation failed: {', '.join(validation.get('failed_checks') or ['unknown'])}")
     grounding = {
-        "bbox": primary["bbox"],
-        "positive_point": primary["positive_point"],
-        "boundary_points": primary["boundary_points"],
+        "bbox": candidate["bbox"],
+        "boundary_points": candidate["boundary_points"],
+        "mask_area_ratio_image": candidate.get("mask_area_ratio_image"),
+        "mask_bbox": candidate.get("mask_bbox", candidate["bbox"]),
     }
     return {
-        "conclusion": primary["conclusion"],
-        "confidence": primary["confidence"],
-        "rationale": primary["rationale"],
+        "conclusion": candidate["conclusion"],
+        "confidence": candidate["confidence"],
+        "rationale": candidate["rationale"],
         "grounding": grounding,
-        "validation": primary["validation"],
+        "validation": validation,
         "harness": {
             "enabled": True,
-            "method": "vlm_ruler_crop_multisample_mask_harness",
+            "method": "vlm_boundary_full_image_one_shot",
             "coordinate_frame": "analysis_image_normalized",
             "analysis_image_size": [context.width, context.height],
+            "original_image_size": [context.original_width or context.width, context.original_height or context.height],
+            "analysis_scale": context.analysis_scale,
+            "view_media_type": context.media_type,
             "target_label": target_label,
-            "n_samples_total": len(candidates),
-            "n_valid_samples": len(valid_candidates),
-            "primary_sample_id": primary.get("sample_id"),
-            "primary_was_repaired": bool(primary.get("repaired")),
-            "parent_focus_used": bool(parent_mask is not None),
-            "dominant_target_prior": dominant_target,
-            "proposal_selection": {
-                "mode": "deterministic_ranked_proposals"
-                if guided_proposals
-                else "none",
-                "selected_id": primary.get("guided_proposal_id"),
-                "selected_bbox": primary.get("guided_bbox"),
-                "candidates": [
-                    {
-                        "proposal_id": item["proposal_id"],
-                        "bbox": item["bbox"],
-                        "score": item["score"],
-                        "area_ratio_image": item["area_ratio_image"],
-                        "compactness": item["compactness"],
-                        "contrast": item["contrast"],
-                    }
-                    for item in guided_proposals
-                ],
-            }
-            if guided_proposals
-            else None,
-            "valid_sample_scores": [round(score, 6) for score in scores],
-            "valid_sample_mean_ious": [candidate.get("mean_peer_iou", 1.0) for candidate in valid_candidates],
-            "iou_matrix": [[round(value, 6) for value in row] for row in iou_matrix],
-            "valid_samples": [
-                {
-                    "sample_id": candidate.get("sample_id"),
-                    "bbox": candidate.get("bbox"),
-                    "area_ratio_image": (candidate.get("validation") or {}).get("area_ratio_image"),
-                    "selection_score": candidate.get("selection_score"),
-                    "contrast": (candidate.get("validation") or {}).get("contrast"),
-                    "edge_alignment": (candidate.get("validation") or {}).get("edge_alignment"),
-                    "failed_checks": (candidate.get("validation") or {}).get("failed_checks", []),
-                }
-                for candidate in valid_candidates
-            ],
-            "candidate_failures": [
-                {
-                    "sample_id": candidate.get("sample_id"),
-                    "failed_checks": (candidate.get("validation") or {}).get("failed_checks", []),
-                }
-                for candidate in candidates
-            ],
+            "selected_view": candidate["selected_view"],
+            "selected_view_label": candidate["selected_view_label"],
+            "selected_view_bounds": candidate["selected_view_bounds"],
+            "mask_size": candidate.get("mask_size", []),
+            "mask_spans": candidate.get("mask_spans", []),
+            "mask_component_count": candidate.get("mask_component_count", 0),
+            "mask_area_ratio_image": candidate.get("mask_area_ratio_image", 0.0),
+            "raw_boundary_point_count": candidate.get("raw_boundary_point_count", len(candidate.get("boundary_points", []))),
+            "local_mask_foreground_pixels": candidate.get("local_mask_foreground_pixels", 0),
+            "local_boundary_points": candidate.get("local_boundary_points", []),
+            "positive_point": candidate.get("positive_point"),
+            "coarse_bbox": candidate.get("coarse_bbox"),
+            "task_kind": _grounding_task_contract(
+                target_label=target_label,
+                step=step,
+                parent_bbox=parent_bbox,
+                relationship=relationship,
+            )["task_kind"],
+            "view_names": [view.name for view in views if view.selectable],
+            "view_labels": [view.label for view in views],
+            "image_message_names": [view.name for view in image_views],
+            "parent_focus_used": bool(parent_bbox is not None),
+            "validation_summary": {
+                "failed_checks": validation.get("failed_checks", []),
+                "warnings": validation.get("warnings", []),
+            },
+        },
+    }
+
+
+def run_vlm_bbox_grounding_harness(
+    *,
+    request_json: JsonImageRequester,
+    image_payload: dict[str, str],
+    step: dict[str, Any],
+    target_label: str,
+    parent_output: dict[str, Any] | None = None,
+    n_samples: int = 3,
+    repair_rounds: int = 1,
+) -> dict[str, Any]:
+    del n_samples, repair_rounds
+    context = prepare_harness_image(image_payload)
+    parent = parent_grounding(parent_output)
+    parent_bbox = normalize_bbox(parent["bbox"]) if parent.get("bbox") else None
+    relationship = str(step.get("relationship") or "")
+    views = _build_grounding_views(context, parent_bbox=parent_bbox, relationship=relationship)
+    image_views = [view for view in views if view.data_url]
+    candidate = _normalize_bbox_candidate(
+        request_json(
+            [{"name": view.name, "label": view.label, "data_url": view.data_url} for view in image_views],
+            _bbox_global_prompt(
+                target_label=target_label,
+                step=step,
+                parent_bbox=parent_bbox,
+                relationship=relationship,
+                views=views,
+            ),
+            1200,
+            "You localize one medical image evidence region as a bbox. Return only strict JSON.",
+        ),
+        views=views,
+    )
+    validation = _validate_bbox_candidate(
+        candidate=candidate,
+        relationship=relationship,
+        parent_bbox=parent_bbox,
+    )
+    if not validation["valid"]:
+        raise ValueError(f"BBox grounding validation failed: {', '.join(validation.get('failed_checks') or ['unknown'])}")
+    return {
+        "conclusion": candidate["conclusion"],
+        "confidence": candidate["confidence"],
+        "rationale": candidate["rationale"],
+        "grounding": {"bbox": candidate["bbox"]},
+        "validation": validation,
+        "harness": {
+            "enabled": True,
+            "method": "vlm_bbox_full_image_one_shot",
+            "coordinate_frame": "analysis_image_normalized",
+            "analysis_image_size": [context.width, context.height],
+            "original_image_size": [context.original_width or context.width, context.original_height or context.height],
+            "analysis_scale": context.analysis_scale,
+            "view_media_type": context.media_type,
+            "target_label": target_label,
+            "selected_view": candidate["selected_view"],
+            "selected_view_label": candidate["selected_view_label"],
+            "selected_view_bounds": candidate["selected_view_bounds"],
+            "local_bbox": candidate["local_bbox"],
+            "view_names": [view.name for view in views if view.selectable],
+            "image_message_names": [view.name for view in image_views],
+            "parent_focus_used": bool(parent_bbox is not None),
+            "validation_summary": {
+                "failed_checks": validation.get("failed_checks", []),
+                "warnings": validation.get("warnings", []),
+            },
         },
     }
 
@@ -1362,11 +1707,21 @@ def normalize_grounding_payload(
     relationship: str = "",
     parent_bbox: list[float] | None = None,
 ) -> dict[str, Any]:
-    candidate = _normalize_candidate(payload)
+    context = HarnessImage(
+        image=Image.new("RGB", (100, 100), "black"),
+        data_url="",
+        media_type="image/png",
+        width=100,
+        height=100,
+    )
+    candidate = _normalize_candidate(
+        {"selected_view": payload.get("selected_view", "full-image"), **payload},
+        views=[HarnessView(name="full-image", label="View 1: original full image", data_url="", bounds=None)],
+        context=context,
+    )
     validation = validate_grounding(
         grounding={
             "bbox": candidate["bbox"],
-            "positive_point": candidate["positive_point"],
             "boundary_points": candidate["boundary_points"],
         },
         relationship=relationship,
@@ -1380,7 +1735,6 @@ def normalize_grounding_payload(
         "rationale": candidate["rationale"],
         "grounding": {
             "bbox": candidate["bbox"],
-            "positive_point": candidate["positive_point"],
             "boundary_points": candidate["boundary_points"],
         },
         "validation": validation,
@@ -1395,19 +1749,14 @@ def validate_grounding(
 ) -> dict[str, Any]:
     failed_checks: list[str] = []
     bbox = normalize_bbox(grounding["bbox"])
-    point = normalize_point(grounding["positive_point"])
     boundary_points = normalize_boundary_points(grounding["boundary_points"])
 
-    if not inside_bbox(point, bbox):
-        failed_checks.append("positive_point_outside_bbox")
     relation = _normalize_relation_name(relationship)
     if relation == "inside_parent" and parent_bbox:
         for boundary_point in boundary_points:
             if not inside_bbox(boundary_point, parent_bbox):
                 failed_checks.append("boundary_outside_parent_bbox")
                 break
-        if not inside_bbox(point, parent_bbox):
-            failed_checks.append("positive_point_outside_parent_bbox")
         if area_ratio(bbox) > area_ratio(parent_bbox):
             failed_checks.append("bbox_larger_than_parent")
 
@@ -1425,7 +1774,7 @@ def compute_measurements(parent_outputs: list[dict[str, Any]]) -> dict[str, floa
         geometry = parent_grounding(parent_outputs[0])
         points = geometry.get("boundary_points") or []
         bbox = geometry.get("bbox") or bbox_from_points(points)
-        area = polygon_area(points)
+        area = float(geometry.get("mask_area_ratio_image")) if geometry.get("mask_area_ratio_image") not in (None, "") else polygon_area(points)
         perimeter = polygon_perimeter(points)
         width = max(bbox[2] - bbox[0], 1e-6)
         height = max(bbox[3] - bbox[1], 1e-6)

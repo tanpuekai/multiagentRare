@@ -152,69 +152,103 @@ DEFAULT_TOOLSET: list[dict[str, Any]] = [
 
 PLANNING_PROFILES: list[dict[str, Any]] = [
     {
-        "name": "breast_ultrasound",
+        "name": "primary_target_localization",
         "keywords": [
-            "breast",
-            "ultrasound",
-            "bus",
-            "b-us",
-            "mammary",
-            "bi-rads",
-            "birads",
+            "localize",
+            "locate",
+            "segment",
+            "boundary",
+            "contour",
+            "target",
+            "region",
+            "structure",
             "lesion",
             "mass",
-            "hypoechoic",
-            "posterior acoustic",
-            "malignancy",
+            "finding",
         ],
         "guidance": (
-            "Use a lesion-first workflow for breast ultrasound. Start with lesion segmentation, compute size and shape "
-            "measurements, then add separate qualitative final indicators for suspicious margins, echogenicity, "
-            "posterior acoustic features, orientation, and other malignancy-associated visual evidence."
+            "Start from the single most relevant visible object or reusable ROI. Use boundary-point grounding only when "
+            "that object needs a mask for measurement or as a parent region."
         ),
-        "plan_family": "breast_ultrasound",
+        "pattern_type": "primary_target_localization",
     },
     {
-        "name": "glaucoma_fundus",
+        "name": "attribute_within_grounded_target",
         "keywords": [
-            "glaucoma",
-            "fundus",
-            "retina",
-            "optic disc",
-            "optic cup",
-            "cup-to-disc",
-            "vcdr",
-            "rim",
-            "peripapillary",
-            "bayoneting",
+            "margin",
+            "shape",
+            "texture",
+            "orientation",
+            "pattern",
+            "surface",
+            "internal",
+            "property",
+            "characteristic",
+            "feature",
         ],
         "guidance": (
-            "Use a disc-and-cup workflow for fundus glaucoma screening. Extract optic disc and optic cup evidence, compute "
-            "vertical cup-to-disc ratio, then add separate qualitative final indicators for rim thinning or notching, "
-            "beta-zone peripapillary atrophy, optic disc hemorrhage, and vessel bayoneting."
+            "When a qualitative judgment refers to a property of an already grounded entity, reuse that grounded target "
+            "instead of creating a new unrelated localization step."
         ),
-        "plan_family": "glaucoma_fundus",
+        "pattern_type": "attribute_within_grounded_target",
     },
     {
-        "name": "generic_medical_image",
+        "name": "relative_region_evidence",
         "keywords": [
-            "image",
-            "medical",
-            "xray",
-            "x-ray",
-            "ct",
-            "mri",
-            "ultrasound",
-            "photo",
-            "jpg",
-            "jpeg",
-            "png",
+            "inside",
+            "within",
+            "adjacent",
+            "around",
+            "near",
+            "deep",
+            "posterior",
+            "surrounding",
+            "neighboring",
+            "relative",
         ],
         "guidance": (
-            "When the task is underspecified, first classify modality, anatomy, view, and image quality, then localize the "
-            "dominant abnormal visual target and break the downstream plan into a small number of evidence-focused steps."
+            "If qualitative evidence is defined relative to another region, create an explicit parent dependency and "
+            "ground the evidence with a bbox unless a mask is required for measurement."
         ),
-        "plan_family": "generic_medical_image",
+        "pattern_type": "relative_region_evidence",
+    },
+    {
+        "name": "quantitative_geometry",
+        "keywords": [
+            "measure",
+            "measurement",
+            "ratio",
+            "size",
+            "diameter",
+            "height",
+            "width",
+            "area",
+            "perimeter",
+            "quantitative",
+        ],
+        "guidance": (
+            "Once grounded evidence exists, use a deterministic coding step for geometry, ratios, and derived indicators "
+            "instead of asking the VLM to estimate those values informally."
+        ),
+        "pattern_type": "quantitative_geometry",
+    },
+    {
+        "name": "multimodal_evidence_synthesis",
+        "keywords": [
+            "text",
+            "document",
+            "history",
+            "report",
+            "context",
+            "clinical",
+            "multimodal",
+            "summary",
+        ],
+        "guidance": (
+            "Keep image grounding, text interpretation, and structured aggregation as separate executable steps whenever "
+            "the diagnostic task depends on both visual and non-visual evidence."
+        ),
+        "pattern_type": "multimodal_evidence_synthesis",
     },
 ]
 
@@ -250,7 +284,9 @@ class PlannerRAG:
         if visual_profile:
             query_parts.extend(
                 [
-                    visual_profile.get("planning_family", ""),
+                    visual_profile.get("task_kind", ""),
+                    visual_profile.get("target_scope", ""),
+                    visual_profile.get("primary_target", ""),
                     visual_profile.get("modality", ""),
                     visual_profile.get("anatomy", ""),
                     visual_profile.get("exam_type", ""),
@@ -265,19 +301,17 @@ class PlannerRAG:
         scored: list[tuple[float, dict[str, Any]]] = []
         for item in self.corpus:
             keyword_hits = sum(1 for keyword in item["keywords"] if keyword.lower() in lowered)
-            profile_bonus = 8.0 if visual_profile and visual_profile.get("planning_family") == item["plan_family"] else 0.0
             overlap = len(query_tokens & _tokenize(" ".join([item["name"], item["guidance"], " ".join(item["keywords"])])))
-            score = profile_bonus + (keyword_hits * 4.0) + overlap
+            score = (keyword_hits * 4.0) + overlap
             if score > 0:
                 scored.append((score, item))
         if not scored:
-            generic = next(profile for profile in self.corpus if profile["plan_family"] == "generic_medical_image")
-            scored.append((1.0, generic))
+            scored.append((1.0, self.corpus[0]))
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [
             {
                 "name": item["name"],
-                "plan_family": item["plan_family"],
+                "pattern_type": item["pattern_type"],
                 "score": round(score, 3),
                 "guidance": item["guidance"],
             }
@@ -299,7 +333,9 @@ def _retrieve_planning_context(
                 f"- anatomy: {visual_profile.get('anatomy') or 'unknown'}",
                 f"- exam_type: {visual_profile.get('exam_type') or 'unknown'}",
                 f"- task_goal: {visual_profile.get('task_goal') or 'unspecified'}",
-                f"- planning_family: {visual_profile.get('planning_family') or 'generic_medical_image'}",
+                f"- task_kind: {visual_profile.get('task_kind') or 'mixed_visual_review'}",
+                f"- target_scope: {visual_profile.get('target_scope') or 'unknown'}",
+                f"- primary_target: {visual_profile.get('primary_target') or 'unspecified'}",
                 f"- salient_targets: {_join_items([str(item) for item in visual_profile.get('salient_targets', []) if item])}",
                 f"- retrieval_tags: {_join_items([str(item) for item in visual_profile.get('retrieval_tags', []) if item])}",
             ]
@@ -350,6 +386,15 @@ def _normalize_tool_config(item: dict[str, Any], action_type: str, tools: list[i
     raw = item.get("tool_config")
     if isinstance(raw, dict) and raw.get("tool_type"):
         normalized = dict(raw)
+        if normalized.get("tool_type") == "evidence_vlm":
+            normalized["seg_type"] = _normalize_seg_type(
+                normalized.get("seg_type"),
+                action=str(item.get("action") or ""),
+                finding=finding,
+            )
+            normalized["evidence_mode"] = "boundary_points"
+        if normalized.get("tool_type") == "vlm":
+            normalized["evidence_mode"] = "bbox"
         if action_type == "qualitative":
             normalized.setdefault("finding", finding or "target finding")
             if not isinstance(normalized.get("rv_config"), dict) or not normalized.get("rv_config"):
@@ -357,45 +402,92 @@ def _normalize_tool_config(item: dict[str, Any], action_type: str, tools: list[i
         return normalized
     if action_type == "quantitative":
         if any(tool == 2 for tool in tools):
-            seg_type = str(item.get("seg_type") or finding or "target_region")
-            seg_type = re.sub(r"[^a-z0-9_]+", "_", seg_type.lower()).strip("_") or "target_region"
-            return {"tool_type": "evidence_vlm", "seg_type": seg_type}
+            seg_type = _normalize_seg_type(item.get("seg_type"), action=str(item.get("action") or ""), finding=finding)
+            return {"tool_type": "evidence_vlm", "seg_type": seg_type, "evidence_mode": "boundary_points"}
         return {"tool_type": "coding"}
     image_step = any(tool == 1 for tool in tools) and 0 in [int(value) for value in item.get("input_type", [0])]
     return {
         "tool_type": "vlm" if image_step else "text_vlm",
         "finding": finding or "target finding",
+        "evidence_mode": "bbox" if image_step else "",
         "rv_config": _rv_config(finding, image_step=image_step),
     }
 
 
 def _infer_finding_from_action(action: str) -> str:
     text = re.sub(r"\s+", " ", str(action or "")).strip()
-    lowered = text.lower()
-    if "echogenicity" in lowered or "echo" in lowered or "texture" in lowered:
-        return "echogenicity and internal texture characterization" if "internal" in lowered or "texture" in lowered else "echogenicity"
-    if "margin" in lowered or "spiculated" in lowered or "angular" in lowered:
-        return "irregular or spiculated margins"
-    if "posterior" in lowered or "shadow" in lowered:
-        return "posterior acoustic features"
-    if "orientation" in lowered or "skin plane" in lowered or "taller-than-wide" in lowered:
-        return "lesion orientation"
-    if "surrounding" in lowered or "perilesional" in lowered or "architectural" in lowered or "ductal" in lowered:
-        return "surrounding tissue reaction"
-    if "vascular" in lowered:
-        return "vascularity"
-    if "calcification" in lowered:
-        return "calcification"
     text = re.sub(
         r"^(analyze|assess|inspect|examine|determine|identify|classify|evaluate|extract|localize|describe|interpret)\s+",
         "",
         text,
         flags=re.IGNORECASE,
     )
+    text = re.sub(r"\bfor downstream\b.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bas (input|evidence)\b.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bfor (later|subsequent|follow-up)\b.*$", "", text, flags=re.IGNORECASE)
     text = text.strip(" .")
     if not text:
         return "target diagnostic finding"
     return text[:160]
+
+
+_GENERIC_SEG_TYPES = {
+    "",
+    "target_region",
+    "boundary_points",
+    "instance_boundary",
+    "boundary_point",
+    "boundary",
+    "mask",
+    "region_mask",
+    "roi",
+    "sparse_landmark",
+}
+
+
+def _derive_seg_phrase(action: str, finding: str | None) -> str:
+    text = re.sub(r"\s+", " ", str(action or "")).strip()
+    lowered = text.lower()
+    replacements = [
+        r"^ground\s+the\s+",
+        r"^ground\s+boundary\s+points\s+of\s+",
+        r"^ground\s+boundary\s+points\s+for\s+",
+        r"^ground\s+",
+        r"^localize\s+",
+        r"^segment\s+",
+        r"^trace\s+",
+        r"^identify\s+",
+        r"\s+using\s+boundary-point\s+evidence.*$",
+        r"\s+with\s+boundary\s+points.*$",
+        r"\s+to\s+generate\s+binary\s+segmentation\s+mask.*$",
+        r"\s+to\s+create\s+.*mask.*$",
+        r"\s+for\s+mask\s+generation.*$",
+        r"\s+for\s+quantitative.*$",
+        r"\s+from\s+masks.*$",
+    ]
+    for pattern in replacements:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(the|a|an)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bboundary points\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bbinary segmentation mask\b", "", text, flags=re.IGNORECASE)
+    text = text.strip(" .,-_")
+    if not text:
+        text = str(finding or "").strip()
+    if not text:
+        text = "target region"
+    return text
+
+
+def _normalize_seg_type(raw_seg_type: object, *, action: str, finding: str | None) -> str:
+    raw_text = re.sub(r"[_\-]+", " ", str(raw_seg_type or "").lower()).strip()
+    raw_text = _derive_seg_phrase(raw_text, finding)
+    seg_type = re.sub(r"[^a-z0-9_]+", "_", raw_text).strip("_")
+    if seg_type not in _GENERIC_SEG_TYPES:
+        return seg_type
+    phrase = _derive_seg_phrase(action, finding)
+    normalized = re.sub(r"[^a-z0-9_]+", "_", phrase.lower()).strip("_")
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or "target_region"
 
 
 def _is_placeholder_finding(finding: str | None) -> bool:
@@ -487,7 +579,9 @@ def _visual_retrieval_prompt(submission: CaseSubmission) -> str:
           "anatomy": "",
           "exam_type": "",
           "task_goal": "",
-          "planning_family": "breast_ultrasound|glaucoma_fundus|generic_medical_image",
+          "task_kind": "locate_primary_target|assess_grounded_target|localize_relative_region|multimodal_review|mixed_visual_review",
+          "target_scope": "entity|local_region|relative_region|diffuse_pattern|unknown",
+          "primary_target": "",
           "retrieval_tags": ["", ""],
           "salient_targets": ["", ""],
           "confidence": 0.0
@@ -495,7 +589,10 @@ def _visual_retrieval_prompt(submission: CaseSubmission) -> str:
 
         Rules:
         - Do NOT make a diagnosis.
-        - planning_family must be breast_ultrasound for breast ultrasound lesion tasks, glaucoma_fundus for fundus glaucoma tasks, otherwise generic_medical_image.
+        - task_kind must describe the kind of planning problem, not a disease name.
+        - target_scope must describe what kind of region the executor is expected to ground.
+        - primary_target should be the main visible physical entity or evidence region that downstream grounding should focus on first.
+        - primary_target must be visually concrete rather than diagnostic or generic; prefer phrases such as "dominant hypoechoic mass body", "optic disc", "retinal hemorrhage", or "focal opacity" when supported by the image.
         - retrieval_tags and salient_targets should be short, concrete phrases useful for planning.
         - confidence must be a number in [0, 1].
         """
@@ -542,14 +639,13 @@ def _request_visual_profile(
         "anatomy": str(parsed.get("anatomy", "")).strip(),
         "exam_type": str(parsed.get("exam_type", "")).strip(),
         "task_goal": str(parsed.get("task_goal", "")).strip(),
-        "planning_family": str(parsed.get("planning_family", "generic_medical_image")).strip() or "generic_medical_image",
+        "task_kind": str(parsed.get("task_kind", "mixed_visual_review")).strip() or "mixed_visual_review",
+        "target_scope": str(parsed.get("target_scope", "unknown")).strip() or "unknown",
+        "primary_target": str(parsed.get("primary_target", "")).strip(),
         "retrieval_tags": [str(item).strip() for item in parsed.get("retrieval_tags", []) if str(item).strip()],
         "salient_targets": [str(item).strip() for item in parsed.get("salient_targets", []) if str(item).strip()],
         "confidence": max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0))),
     }
-    valid_families = {item["plan_family"] for item in PLANNING_PROFILES}
-    if profile["planning_family"] not in valid_families:
-        raise ValueError(f"Planner visual retrieval returned unsupported planning_family: {profile['planning_family']}")
     return profile, provider.provider_name, provider.model_name
 
 
@@ -568,7 +664,9 @@ def _planner_prompt(
         - anatomy: {visual_profile.get('anatomy') or 'unknown'}
         - exam_type: {visual_profile.get('exam_type') or 'unknown'}
         - task_goal: {visual_profile.get('task_goal') or 'unspecified'}
-        - planning_family: {visual_profile.get('planning_family') or 'generic_medical_image'}
+        - task_kind: {visual_profile.get('task_kind') or 'mixed_visual_review'}
+        - target_scope: {visual_profile.get('target_scope') or 'unknown'}
+        - primary_target: {visual_profile.get('primary_target') or 'unspecified'}
         - salient_targets: {_join_items([str(item) for item in visual_profile.get('salient_targets', []) if item])}
         """
         if visual_profile
@@ -615,19 +713,27 @@ def _planner_prompt(
         - For non-image outputs use output_path "diagnosis.json"; only masks or images may use .png/.jpg paths.
         - Each qualitative final indicator must be a separate step with a concise abnormal finding.
         - Keep the plan compact: usually 4-7 steps.
-        - If the retrieved family is breast_ultrasound, prefer lesion segmentation -> quantitative lesion metrics -> image-based malignancy indicators.
-        - If the retrieved family is glaucoma_fundus, prefer disc/cup evidence -> cup-disc metric -> fundus image indicators.
+        - Do not use disease-specific templates or hardcoded specialty workflows.
+        - The first image-grounding step should localize the primary target or strongest evidence region needed by later steps.
+        - Use the visual task profile's primary_target as the first localization seg_type when it is concrete.
+        - The first localization seg_type must name a visible physical target boundary, not an abstract diagnosis, broad disease class, or generic word such as lesion/abnormality when a more concrete visible entity is available.
+        - Each action must be operational and specific. Avoid vague wording such as "analyze the image" or "check the current finding".
         - Do NOT include report generation, decider fusion, HITL text, or human-facing SOP wording.
-        - For qualitative VLM steps, include tool_config with tool_type "vlm" and an rv_config.
+        - For qualitative VLM evidence-check steps, include tool_config with tool_type "vlm", an rv_config, and evidence_mode "bbox"; these steps must be grounded only with a bbox.
         - For qualitative text interpretation steps, use tool_config.tool_type = "text_vlm".
-        - For quantitative evidence extraction, use tool_config.tool_type = "evidence_vlm" and include a seg_type.
+        - Use tool_config.tool_type = "evidence_vlm" with evidence_mode "boundary_points" only when the step needs an actual mask/contour for a visible object that will be measured or reused as a parent ROI.
+        - Do not use evidence_vlm merely to show a qualitative imaging sign, artifact, enhancement, shadow, texture, margin, or pattern. Those evidence-check steps must use tool_type "vlm" and evidence_mode "bbox".
+        - For evidence_vlm steps, include a concise seg_type naming the target object, not an imaging sign unless the sign itself is explicitly being measured as a region.
         - For deterministic computation, use tool_config.tool_type = "coding".
+        - Coding steps may only depend on upstream evidence_vlm mask steps that provide boundary_points; do not feed bbox-only qualitative indicators into geometry computation.
         - When a grounded region depends on a previously localized parent region, also include relative_to_step, relationship, and parent_label.
-        - Use relationship values such as same_target, inside_parent, deep_to_parent, adjacent_to_parent, or overlaps_parent only when they are visually meaningful.
-        - For breast ultrasound, margin, echogenicity, texture, shape, and orientation indicators should usually use relationship "same_target" relative to the lesion segmentation step.
-        - For breast ultrasound posterior acoustic indicators, use relationship "deep_to_parent" relative to the lesion segmentation step.
+        - Use relationship values such as same_target, inside_parent, deep_to_parent, adjacent_to_parent, or overlaps_parent only when they are visually meaningful and explicit.
+        - If a step evaluates an attribute of the same entity grounded earlier, reuse that target with relationship "same_target" instead of creating a fresh localization.
+        - If a step evaluates a region defined relative to an earlier target, make the parent dependency explicit instead of relying on downstream inference.
+        - When useful, add target_scope using one of: entity, local_region, relative_region, diffuse_pattern.
         - When useful, add spatial_priors and sanity_checks as short arrays to help the downstream grounding harness validate the result.
-        - Quantitative evidence extraction should prefer evidence_mode "boundary_points" unless the target is a sparse landmark.
+        - Do not ask qualitative evidence-check steps to output masks, polygons, or boundary points.
+        - Do not ask localization or quantitative segmentation steps to output bbox-only evidence.
         """
     ).strip()
 
@@ -685,6 +791,7 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
             "tool_config": _normalize_tool_config(item, action_type, tools, finding),
         }
         for optional_key in [
+            "target_scope",
             "evidence_mode",
             "relative_to_step",
             "relationship",
@@ -696,115 +803,14 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
                 record[optional_key] = item[optional_key]
             elif optional_key in raw_tool_config:
                 record[optional_key] = raw_tool_config[optional_key]
+        if record["tool_config"].get("tool_type") == "vlm" and "relative_to_step" not in record:
+            nonzero_inputs = [parent for parent in input_type if parent != 0]
+            if len(nonzero_inputs) == 1:
+                record["relative_to_step"] = nonzero_inputs[0]
+                record["relationship"] = "same_target"
         cleaned.append(record)
         known_ids.add(step_id)
     return cleaned
-
-
-def _append_unique(items: list[Any] | None, additions: list[str]) -> list[str]:
-    output: list[str] = []
-    seen: set[str] = set()
-    for item in [*(items or []), *additions]:
-        text = str(item or "").strip()
-        key = text.lower()
-        if text and key not in seen:
-            output.append(text)
-            seen.add(key)
-    return output
-
-
-def _append_unique_ints(items: list[Any] | None, additions: list[int]) -> list[int]:
-    output: list[int] = []
-    seen: set[int] = set()
-    for item in [*(items or []), *additions]:
-        value = int(item)
-        if value not in seen:
-            output.append(value)
-            seen.add(value)
-    return output
-
-
-def _step_text(step: dict[str, Any]) -> str:
-    return f"{step.get('finding') or ''} {step.get('action') or ''}".lower()
-
-
-def _apply_grounding_harness_defaults(
-    steps: list[dict[str, Any]],
-    visual_profile: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    family = str((visual_profile or {}).get("planning_family") or "").strip().lower()
-    if family != "breast_ultrasound":
-        return steps
-    lesion_step = next(
-        (
-            step
-            for step in steps
-            if (step.get("tool_config") or {}).get("tool_type") == "evidence_vlm"
-            and any(term in f"{step.get('action') or ''} {(step.get('tool_config') or {}).get('seg_type') or ''}".lower() for term in ["lesion", "mass", "target"])
-        ),
-        None,
-    )
-    if lesion_step is None:
-        return steps
-    lesion_id = int(lesion_step["id"])
-    lesion_tool_config = lesion_step.get("tool_config") if isinstance(lesion_step.get("tool_config"), dict) else {}
-    lesion_tool_config["evidence_mode"] = "boundary_points"
-    lesion_tool_config["spatial_priors"] = _append_unique(
-        lesion_tool_config.get("spatial_priors") or lesion_step.get("spatial_priors"),
-        [
-            "single dominant lesion",
-            "within breast parenchyma",
-            "dark hypoechoic or anechoic target when visually present",
-            "not annotation text",
-        ],
-    )
-    lesion_tool_config["sanity_checks"] = _append_unique(
-        lesion_tool_config.get("sanity_checks") or lesion_step.get("sanity_checks"),
-        [
-            "single_connected_component",
-            "compact_shape",
-            "dark_target_contrast",
-            "not_text_annotation",
-        ],
-    )
-    lesion_step["tool_config"] = lesion_tool_config
-    lesion_step["evidence_mode"] = "boundary_points"
-    lesion_step["spatial_priors"] = lesion_tool_config["spatial_priors"]
-    lesion_step["sanity_checks"] = lesion_tool_config["sanity_checks"]
-
-    for step in steps:
-        if int(step["id"]) == lesion_id:
-            continue
-        tool_config = step.get("tool_config") if isinstance(step.get("tool_config"), dict) else {}
-        if tool_config.get("tool_type") != "vlm":
-            continue
-        text = _step_text(step)
-        if any(term in text for term in ["margin", "echogenicity", "echo", "orientation", "shape", "texture"]):
-            step["relative_to_step"] = lesion_id
-            step["relationship"] = "same_target"
-            step["parent_label"] = "breast lesion"
-            step["input_type"] = _append_unique_ints(step.get("input_type"), [lesion_id])
-            tool_config["relative_to_step"] = lesion_id
-            tool_config["relationship"] = "same_target"
-            tool_config["parent_label"] = "breast lesion"
-        elif any(term in text for term in ["posterior", "acoustic", "enhancement", "shadow"]):
-            step["relative_to_step"] = lesion_id
-            step["relationship"] = "deep_to_parent"
-            step["parent_label"] = "breast lesion"
-            step["input_type"] = _append_unique_ints(step.get("input_type"), [lesion_id])
-            step["spatial_priors"] = _append_unique(
-                step.get("spatial_priors"),
-                ["deep to the breast lesion", "horizontally aligned with lesion"],
-            )
-            step["sanity_checks"] = _append_unique(
-                step.get("sanity_checks"),
-                ["deep_to_parent", "horizontal_overlap_parent", "not_text_annotation"],
-            )
-            tool_config["relative_to_step"] = lesion_id
-            tool_config["relationship"] = "deep_to_parent"
-            tool_config["parent_label"] = "breast lesion"
-        step["tool_config"] = tool_config
-    return steps
 
 
 def _request_llm_plan(
@@ -829,7 +835,6 @@ def _request_llm_plan(
         max_tokens=4096,
     )
     steps = _validate_steps(_parse_llm_json(content))
-    steps = _apply_grounding_harness_defaults(steps, visual_profile)
     return steps, provider.provider_name, provider.model_name, provider
 
 

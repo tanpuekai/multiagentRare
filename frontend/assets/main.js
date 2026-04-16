@@ -304,8 +304,7 @@
     }
     const boundary = Array.isArray(grounding.boundary_points) ? grounding.boundary_points : [];
     const bbox = Array.isArray(grounding.bbox) ? grounding.bbox : Array.isArray(grounding.coarse_bbox) ? grounding.coarse_bbox : [];
-    const point = Array.isArray(grounding.positive_point) ? grounding.positive_point : [];
-    return Boolean(boundary.length || bbox.length === 4 || point.length === 2);
+    return Boolean(boundary.length || bbox.length === 4);
   }
 
   function overlayColor(index) {
@@ -1118,11 +1117,35 @@
     `;
   }
 
-  function PendingWorkspace({ submission, execution }) {
+  function PendingWorkspace({ submission, execution, currentSession, meta }) {
     if (!submission) {
       return null;
     }
     const failed = Boolean(submission.error_message);
+    const isExecutor = execution?.mode === "executor";
+    const planDisplaySteps =
+      submission.plan_display_steps ||
+      currentSession?.result?.plan_display_steps ||
+      currentSession?.turns?.[currentSession.turns.length - 1]?.result?.plan_display_steps ||
+      [];
+    const records = submission.execution_records || [];
+    const contextSubmission = currentSession?.context_submission || currentSession?.submission || null;
+    const primaryAsset = imageAssetsFromSubmission(contextSubmission)[0] || null;
+    const pendingTitle = failed
+      ? isExecutor
+        ? "执行已中断"
+        : "没有生成计划"
+      : isExecutor
+        ? submission.stage === "rendering"
+          ? "正在整理执行结果"
+          : "正在按计划执行"
+        : "正在生成结果";
+    const pendingSummary = failed
+      ? "Planner/Executor 严格模式下失败，不会 fallback 到半成品输出。错误详情如下。"
+      : isExecutor
+        ? pendingExecutorStatusCopy(submission, planDisplaySteps)
+        : "请求已提交，系统正在处理当前病例并准备回填临床结论。";
+    const activeStep = (planDisplaySteps || []).find((step) => numericStepId(step?.id) === numericStepId(submission.active_step_id));
 
     return html`
       <div className="workspace-feed">
@@ -1154,12 +1177,48 @@
         <div className="result-card pending-result-card">
           <div className="result-head">
             <div>
-              <div className="result-title">${failed ? "没有生成计划" : "正在生成结果"}</div>
-              <div className="result-summary">
-                ${failed ? "Planner/Executor 严格模式下失败，不会 fallback 到半成品输出。错误详情如下。" : "请求已提交，系统正在处理当前病例并准备回填临床结论。"}
-              </div>
+              <div className="result-title">${pendingTitle}</div>
+              <div className="result-summary">${pendingSummary}</div>
             </div>
+            ${isExecutor
+              ? html`
+                  <div className="badge-row">
+                    <span className="badge">${records.length}/${submission.step_count || planDisplaySteps.length || records.length} 步</span>
+                    ${activeStep ? html`<span className="badge">当前：${activeStep.title_zh || `步骤 ${submission.active_step_id}`}</span>` : null}
+                    ${submission.stage === "rendering" ? html`<span className="badge">整理中</span>` : null}
+                  </div>
+                `
+              : null}
           </div>
+          ${isExecutor && planDisplaySteps.length
+            ? html`
+                <div className="info-panel" style=${{ marginTop: "18px" }}>
+                  <${ExecutorMetroProgress}
+                    planDisplaySteps=${planDisplaySteps}
+                    records=${records}
+                    activeStepId=${submission.active_step_id}
+                    failedStepId=${submission.failed_step_id}
+                  />
+                </div>
+              `
+            : null}
+          ${isExecutor && records.length
+            ? html`
+                <div style=${{ display: "grid", gap: "18px", marginTop: "18px" }}>
+                  ${records.map(
+                    (record, index) => html`
+                      <${ExecutorRecordCard}
+                        key=${record.step_id || index}
+                        record=${record}
+                        index=${index}
+                        asset=${primaryAsset}
+                        display=${resolveExecutionDisplay(record, planDisplaySteps, index)}
+                      />
+                    `
+                  )}
+                </div>
+              `
+            : null}
           ${failed
             ? html`
                 <div className="info-panel" style=${{ marginTop: "18px" }}>
@@ -1247,6 +1306,186 @@
     `;
   }
 
+  function numericStepId(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return fallback;
+    }
+    return Math.trunc(parsed);
+  }
+
+  function planStepForRecord(planDisplaySteps, record, fallbackIndex = 0) {
+    const targetId = numericStepId(record?.step_id, fallbackIndex + 1);
+    return (planDisplaySteps || []).find((step) => numericStepId(step?.id) === targetId) || null;
+  }
+
+  function normalizeEvidenceConclusion(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) {
+      return "";
+    }
+    if (normalized === "yes") {
+      return "当前证据支持该征象。";
+    }
+    if (normalized === "no") {
+      return "当前证据不支持该征象。";
+    }
+    if (normalized === "uncertain") {
+      return "当前证据仍不足以做出确定判断。";
+    }
+    if (normalized === "localized") {
+      return "已完成目标区域定位。";
+    }
+    return String(value || "").trim();
+  }
+
+  function buildPendingExecutionDisplay(record, planDisplaySteps, index = 0) {
+    const planStep = planStepForRecord(planDisplaySteps, record, index);
+    const evidence = record?.evidence || {};
+    const artifactType = String(evidence.artifact_type || "").trim().toLowerCase();
+    const title = planStep?.title_zh || `步骤 ${numericStepId(record?.step_id, index + 1)}`;
+    const desc = planStep?.desc_zh || "已完成当前步骤。";
+    const humanCheck = planStep?.human_check_zh || "";
+    const conclusion = normalizeEvidenceConclusion(evidence.conclusion);
+    const confidence = typeof evidence.confidence === "number" ? ` 置信度 ${Math.round(evidence.confidence * 100)}%。` : "";
+
+    if (artifactType === "grounding") {
+      const grounding = evidence.grounding || {};
+      const evidenceBits = [];
+      if (Array.isArray(grounding.boundary_points) && grounding.boundary_points.length) {
+        evidenceBits.push("边界");
+      }
+      else if ((Array.isArray(grounding.bbox) && grounding.bbox.length === 4) || (Array.isArray(grounding.coarse_bbox) && grounding.coarse_bbox.length === 4)) {
+        evidenceBits.push("包围框");
+      }
+      return {
+        title_zh: title,
+        desc_zh: desc,
+        conclusion_zh: conclusion || "已完成区域定位。",
+        evidence_summary_zh: `${evidenceBits.length ? `已输出${evidenceBits.join("、")}证据。` : "已输出结构化定位证据。"}${confidence}`.trim(),
+        human_check_zh: humanCheck,
+        tag_zh: planStep?.tag_zh || "定位",
+      };
+    }
+
+    if (artifactType === "measurements") {
+      const measurementCount = Object.keys(evidence.measurements || {}).length;
+      return {
+        title_zh: title,
+        desc_zh: desc,
+        conclusion_zh: "已完成量化计算。",
+        evidence_summary_zh: `已生成 ${measurementCount || 1} 项结构化量化指标。`,
+        human_check_zh: humanCheck,
+        tag_zh: planStep?.tag_zh || "量化",
+      };
+    }
+
+    return {
+      title_zh: title,
+      desc_zh: desc,
+      conclusion_zh: conclusion || "已完成当前证据判断。",
+      evidence_summary_zh: `已基于上游证据生成结构化判断。${confidence}`.trim(),
+      human_check_zh: humanCheck,
+      tag_zh: planStep?.tag_zh || "证据",
+    };
+  }
+
+  function resolveExecutionDisplay(record, planDisplaySteps, index = 0) {
+    if (record?.display) {
+      return record.display;
+    }
+    return buildPendingExecutionDisplay(record, planDisplaySteps, index);
+  }
+
+  function executorStepStatus(stepId, records, activeStepId, failedStepId) {
+    const normalizedId = numericStepId(stepId);
+    if (normalizedId && numericStepId(failedStepId) === normalizedId) {
+      return "failed";
+    }
+    if ((records || []).some((record) => numericStepId(record?.step_id) === normalizedId)) {
+      return "completed";
+    }
+    if (normalizedId && numericStepId(activeStepId) === normalizedId) {
+      return "running";
+    }
+    return "pending";
+  }
+
+  function pendingExecutorStatusCopy(pending, steps) {
+    if (pending?.error_message) {
+      const failedId = numericStepId(pending?.failed_step_id);
+      return failedId ? `执行在步骤 ${failedId} 中断，已保留此前完成的证据。` : "执行已中断，已保留此前完成的证据。";
+    }
+    if (pending?.stage === "rendering") {
+      return "所有计划步骤已执行完成，正在整理最终展示结果。";
+    }
+    const completedCount = (pending?.execution_records || []).length;
+    const totalCount = Number(pending?.step_count || steps?.length || 0);
+    const activeId = numericStepId(pending?.active_step_id);
+    const activeStep = (steps || []).find((step) => numericStepId(step?.id) === activeId);
+    if (activeId && activeStep) {
+      return `正在执行步骤 ${activeId}：${activeStep.title_zh || "当前步骤"}。已完成 ${completedCount}/${totalCount || steps.length || completedCount} 步。`;
+    }
+    if (completedCount) {
+      return `已完成 ${completedCount}/${totalCount || steps.length || completedCount} 步，正在继续执行剩余计划。`;
+    }
+    return "已接收执行任务，正在准备第一步证据处理。";
+  }
+
+  function ExecutorMetroProgress({ planDisplaySteps, records, activeStepId, failedStepId }) {
+    const steps = planDisplaySteps || [];
+    const [collapsed, setCollapsed] = useState(false);
+    if (!steps.length) {
+      return null;
+    }
+    const completedCount = steps.filter((step, index) => executorStepStatus(numericStepId(step?.id, index + 1), records, activeStepId, failedStepId) === "completed").length;
+    const runningStep = steps.find((step, index) => executorStepStatus(numericStepId(step?.id, index + 1), records, activeStepId, failedStepId) === "running");
+    return html`
+      <div className="executor-metro">
+        <div className="executor-metro-head">
+          <div className="executor-metro-head-main">
+            <div className="panel-title" style=${{ marginBottom: 0 }}>执行进度</div>
+            <div className="executor-metro-summary">
+              <span>${completedCount}/${steps.length} 步</span>
+              ${runningStep ? html`<span>· 当前：${runningStep.title_zh || "执行中"}</span>` : null}
+            </div>
+          </div>
+          <div className="executor-metro-head-actions">
+            <div className="executor-metro-legend">
+              <span className="executor-metro-legend-item"><span className="executor-metro-dot is-completed"></span>已完成</span>
+              <span className="executor-metro-legend-item"><span className="executor-metro-dot is-running"></span>执行中</span>
+              <span className="executor-metro-legend-item"><span className="executor-metro-dot is-pending"></span>待执行</span>
+            </div>
+            <button type="button" className="executor-metro-toggle" onClick=${() => setCollapsed((current) => !current)}>
+              ${collapsed ? "展开线路图" : "收起线路图"}
+            </button>
+          </div>
+        </div>
+        <div className=${cx("executor-metro-list", collapsed && "is-collapsed")}>
+          ${steps.map((step, index) => {
+            const stepId = numericStepId(step?.id, index + 1);
+            const status = executorStepStatus(stepId, records, activeStepId, failedStepId);
+            return html`
+              <div key=${stepId || index} className="executor-metro-step">
+                <div className="executor-metro-rail">
+                  <span className=${cx("executor-metro-dot", `is-${status}`)}></span>
+                  ${index < steps.length - 1 ? html`<span className=${cx("executor-metro-line", `is-${status}`)}></span>` : null}
+                </div>
+                <div className="executor-metro-copy">
+                  <div className="executor-metro-step-title">${step.title_zh || `步骤 ${index + 1}`}</div>
+                  <div className="executor-metro-step-meta">
+                    ${status === "completed" ? "已完成" : status === "running" ? "执行中" : status === "failed" ? "失败" : "待执行"}
+                    ${step.tag_zh ? ` · ${step.tag_zh}` : ""}
+                  </div>
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
   function PlannerResultWorkspace({ session, meta }) {
     const result = session.result;
     const submission = session.submission;
@@ -1306,6 +1545,8 @@
     const result = session.result;
     const submission = session.submission;
     const records = result.execution_records || [];
+    const planDisplaySteps = result.plan_display_steps || [];
+    const primaryAsset = imageAssetsFromSubmission(session.context_submission || submission)[0] || null;
     return html`
       <div className="workspace-feed">
         <div className="message-card message-user">
@@ -1335,22 +1576,27 @@
             </div>
           </div>
 
-          <div className="info-panel">
-            <div className="panel-title">执行记录</div>
-            <div className="info-list">
-              ${records.map(
-                (record, index) => html`
-                  <div key=${record.step_id || index} className="info-list-item">
-                    <span className="badge">${record.step_id || index + 1}</span>
-                    <span>
-                      <strong>${record.display?.title_zh || `步骤 ${index + 1}`}</strong>
-                      <${ExecutionDisplayCopy} display=${record.display} />
-                      <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${record.display?.tag_zh || "完成"}</span>
-                    </span>
-                  </div>
-                `
-              )}
-            </div>
+          <div className="info-panel" style=${{ marginBottom: "18px" }}>
+            <${ExecutorMetroProgress}
+              planDisplaySteps=${planDisplaySteps}
+              records=${records}
+              activeStepId=${null}
+              failedStepId=${null}
+            />
+          </div>
+
+          <div style=${{ display: "grid", gap: "18px" }}>
+            ${records.map(
+              (record, index) => html`
+                <${ExecutorRecordCard}
+                  key=${record.step_id || index}
+                  record=${record}
+                  index=${index}
+                  asset=${primaryAsset}
+                  display=${resolveExecutionDisplay(record, planDisplaySteps, index)}
+                />
+              `
+            )}
           </div>
         </div>
       </div>
@@ -1431,15 +1677,28 @@
     const color = overlayColor(index);
     const boundary = Array.isArray(grounding.boundary_points) ? grounding.boundary_points : [];
     const bbox = Array.isArray(grounding.bbox) ? grounding.bbox : Array.isArray(grounding.coarse_bbox) ? grounding.coarse_bbox : null;
-    const point = Array.isArray(grounding.positive_point) ? grounding.positive_point : null;
     const polygon = boundary.map((item) => `${Math.max(0, Math.min(1, Number(item?.[0] || 0))) * 100},${Math.max(0, Math.min(1, Number(item?.[1] || 0))) * 100}`).join(" ");
+    const showBoundary = boundary.length >= 3 && Boolean(polygon);
+    const showBbox = !showBoundary && Array.isArray(bbox) && bbox.length === 4;
     return html`
       <div style=${{ marginTop: "14px", overflow: "hidden", borderRadius: "8px", border: "1px solid var(--line)", background: "#fff" }}>
         <div style=${{ position: "relative" }}>
           <img src=${imageSrcFromAsset(asset)} alt=${asset.name || `步骤 ${record.step_id || index + 1} 证据图`} style=${{ display: "block", width: "100%", height: "auto" }} />
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style=${{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-            ${polygon ? html`<polygon points=${polygon} fill=${`${color}22`} stroke=${color} strokeWidth="0.8"></polygon>` : null}
-            ${bbox
+            ${showBoundary
+              ? html`
+                  <polygon
+                    points=${polygon}
+                    fill="none"
+                    stroke=${color}
+                    strokeWidth="1.4"
+                    vectorEffect="non-scaling-stroke"
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                  ></polygon>
+                `
+              : null}
+            ${showBbox
               ? html`
                   <rect
                     x=${Math.max(0, Math.min(1, Number(bbox[0] || 0))) * 100}
@@ -1448,17 +1707,46 @@
                     height=${Math.max(0, Math.min(1, Number((bbox[3] || 0) - (bbox[1] || 0)))) * 100}
                     fill="none"
                     stroke=${color}
-                    strokeDasharray="2 1.5"
-                    strokeWidth="0.6"
+                    strokeDasharray="4 3"
+                    strokeWidth="1.2"
+                    vectorEffect="non-scaling-stroke"
                   ></rect>
                 `
               : null}
-            ${point ? html`<circle cx=${Math.max(0, Math.min(1, Number(point[0] || 0))) * 100} cy=${Math.max(0, Math.min(1, Number(point[1] || 0))) * 100} r="1.1" fill=${color}></circle>` : null}
           </svg>
         </div>
         <div style=${{ padding: "10px 12px", fontSize: "13px", color: "var(--text-subtle)" }}>
           本图仅显示步骤 ${record.step_id || index + 1} 的证据标注，不叠加其他步骤。
         </div>
+      </div>
+    `;
+  }
+
+  function ExecutorRecordCard({ record, index, asset, display }) {
+    return html`
+      <div className="info-panel executor-record-card">
+        <div className="panel-title">步骤 ${record.step_id || index + 1}</div>
+        <div className="info-list-item" style=${{ alignItems: "flex-start" }}>
+          <span className="badge">${record.step_id || index + 1}</span>
+          <span>
+            <strong>${display?.title_zh || `步骤 ${index + 1}`}</strong>
+            <${ExecutionDisplayCopy} display=${display} />
+            <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${display?.tag_zh || "完成"}</span>
+          </span>
+        </div>
+        ${hasGroundingEvidence(record) && asset
+          ? html`<${StepEvidenceFigure} asset=${asset} record=${record} index=${index} />`
+          : hasGroundingEvidence(record)
+            ? html`
+                <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
+                  <span>此步骤已生成 grounding 坐标，但当前上下文缺少原始图像，暂时无法绘制证据图。</span>
+                </div>
+              `
+            : html`
+                <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
+                  <span>此步骤输出结构化证据，不单独绘制图像标注。</span>
+                </div>
+              `}
       </div>
     `;
   }
@@ -1503,6 +1791,7 @@
   function ExecutorTurnCard({ turn, meta, contextSubmission }) {
     const result = turn.result;
     const records = result.execution_records || [];
+    const planDisplaySteps = result.plan_display_steps || [];
     const assets = imageAssetsFromSubmission(contextSubmission || turn.submission);
     const primaryAsset = assets[0] || null;
     return html`
@@ -1518,33 +1807,24 @@
             <span className="badge">证据执行</span>
           </div>
         </div>
+        <div className="info-panel" style=${{ marginBottom: "18px" }}>
+          <${ExecutorMetroProgress}
+            planDisplaySteps=${planDisplaySteps}
+            records=${records}
+            activeStepId=${null}
+            failedStepId=${null}
+          />
+        </div>
         <div style=${{ display: "grid", gap: "18px", marginTop: "18px" }}>
           ${records.map(
             (record, index) => html`
-              <div key=${record.step_id || index} className="info-panel">
-                <div className="panel-title">步骤 ${record.step_id || index + 1}</div>
-                <div className="info-list-item" style=${{ alignItems: "flex-start" }}>
-                  <span className="badge">${record.step_id || index + 1}</span>
-                  <span>
-                    <strong>${record.display?.title_zh || `步骤 ${index + 1}`}</strong>
-                    <${ExecutionDisplayCopy} display=${record.display} />
-                    <span style=${{ display: "inline-flex", marginTop: "8px" }} className="badge">${record.display?.tag_zh || "完成"}</span>
-                  </span>
-                </div>
-                ${hasGroundingEvidence(record) && primaryAsset
-                  ? html`<${StepEvidenceFigure} asset=${primaryAsset} record=${record} index=${index} />`
-                  : hasGroundingEvidence(record)
-                    ? html`
-                        <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
-                          <span>此步骤已有 grounding 坐标，但当前上下文缺少原始图像，无法绘制证据图。</span>
-                        </div>
-                      `
-                  : html`
-                      <div className="info-list-item" style=${{ marginTop: "14px", color: "var(--text-subtle)" }}>
-                        <span>此步骤输出结构化证据，不单独绘制图像标注。</span>
-                      </div>
-                    `}
-              </div>
+              <${ExecutorRecordCard}
+                key=${record.step_id || index}
+                record=${record}
+                index=${index}
+                asset=${primaryAsset}
+                display=${resolveExecutionDisplay(record, planDisplaySteps, index)}
+              />
             `
           )}
         </div>
@@ -3307,6 +3587,69 @@
       return () => window.removeEventListener("keydown", handleKeydown);
     }, []);
 
+    useEffect(() => {
+      if (!pendingSubmission?.job_id || pendingSubmission?.execution?.mode !== "executor") {
+        return undefined;
+      }
+      let disposed = false;
+      let timerId = null;
+
+      async function pollExecutorJob() {
+        try {
+          const data = await fetchJson(`/api/executor-jobs/${pendingSubmission.job_id}`);
+          if (disposed) {
+            return;
+          }
+          const job = data.job || {};
+          if (job.status === "completed" && job.session) {
+            setCurrentSession(job.session);
+            applySessionList(job.sessions || []);
+            setPendingSubmission(null);
+            setActiveView("workspace");
+            pushNotice("Executor 已完成执行。");
+            return;
+          }
+          setPendingSubmission((current) =>
+            current && current.job_id === job.job_id
+              ? {
+                  ...current,
+                  ...job,
+                }
+              : current
+          );
+          if (job.status === "failed") {
+            return;
+          }
+        } catch (error) {
+          if (disposed) {
+            return;
+          }
+          if (!handleAuthError(error)) {
+            setPendingSubmission((current) =>
+              current && current.job_id === pendingSubmission.job_id
+                ? {
+                    ...current,
+                    status: "failed",
+                    stage: "failed",
+                    error_message: error.message,
+                  }
+                : current
+            );
+          }
+          return;
+        }
+        timerId = window.setTimeout(pollExecutorJob, 1200);
+      }
+
+      pollExecutorJob();
+      return () => {
+        disposed = true;
+        if (timerId) {
+          window.clearTimeout(timerId);
+        }
+      };
+    }, [pendingSubmission?.job_id]);
+
     async function login() {
       if (!loginDraft.username.trim() || !loginDraft.password) {
         pushNotice("请输入用户名和密码。", "error");
@@ -3479,26 +3822,61 @@
           uploaded_image_assets: imageAssets,
           context_session_id: currentSession?.session_id || "",
         };
-        setPendingSubmission({
-          timestamp: new Date().toLocaleString("zh-CN", { hour12: false }),
-          case_summary: composer.case_summary,
-          execution,
-        });
+        const pendingTimestamp = new Date().toLocaleString("zh-CN", { hour12: false });
         setActiveView("workspace");
-        const data = await fetchJson("/api/diagnose", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        setCurrentSession(data.session);
-        setPendingSubmission(null);
-        applySessionList(data.sessions || []);
-        setComposer((current) => ({
-          ...makeDefaultComposer(meta, settings),
-          input_expanded: current.input_expanded,
-          single_model_test: current.single_model_test,
-        }));
-        setActiveView("workspace");
-        pushNotice("会诊已生成。");
+        if (executorRequested) {
+          setPendingSubmission({
+            timestamp: pendingTimestamp,
+            case_summary: composer.case_summary,
+            execution,
+            status: "queued",
+            stage: "queued",
+            active_step_id: null,
+            failed_step_id: null,
+            step_count: currentSession?.result?.plan_display_steps?.length || 0,
+            plan_display_steps: currentSession?.result?.plan_display_steps || [],
+            execution_records: [],
+            error_message: "",
+          });
+          const data = await fetchJson("/api/executor-jobs", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          setPendingSubmission((current) =>
+            current
+              ? {
+                  ...current,
+                  ...(data.job || {}),
+                }
+              : null
+          );
+          setComposer((current) => ({
+            ...makeDefaultComposer(meta, settings),
+            input_expanded: current.input_expanded,
+            single_model_test: current.single_model_test,
+          }));
+          pushNotice("Executor 已开始按计划执行。");
+        } else {
+          setPendingSubmission({
+            timestamp: pendingTimestamp,
+            case_summary: composer.case_summary,
+            execution,
+          });
+          const data = await fetchJson("/api/diagnose", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          setCurrentSession(data.session);
+          setPendingSubmission(null);
+          applySessionList(data.sessions || []);
+          setComposer((current) => ({
+            ...makeDefaultComposer(meta, settings),
+            input_expanded: current.input_expanded,
+            single_model_test: current.single_model_test,
+          }));
+          setActiveView("workspace");
+          pushNotice("会诊已生成。");
+        }
       } catch (error) {
         setPendingSubmission((current) =>
           current
@@ -3850,10 +4228,22 @@
                       ? html`
                           <div className="workspace-feed">
                             <${ResultWorkspace} session=${currentSession} meta=${meta} />
-                            <${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />
+                            <${PendingWorkspace}
+                              submission=${pendingSubmission}
+                              execution=${pendingSubmission.execution}
+                              currentSession=${currentSession}
+                              meta=${meta}
+                            />
                           </div>
                         `
-                      : html`<${PendingWorkspace} submission=${pendingSubmission} execution=${pendingSubmission.execution} />`
+                      : html`
+                          <${PendingWorkspace}
+                            submission=${pendingSubmission}
+                            execution=${pendingSubmission.execution}
+                            currentSession=${currentSession}
+                            meta=${meta}
+                          />
+                        `
                     : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
               </div>
 

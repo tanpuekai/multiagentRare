@@ -5,7 +5,7 @@ import re
 import time
 from http.client import RemoteDisconnected
 from textwrap import dedent
-from typing import Any
+from typing import Any, Callable
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -16,6 +16,7 @@ from rare_agents.grounding_harness import (
     build_harness_constraints,
     compute_measurements,
     parent_grounding,
+    run_vlm_bbox_grounding_harness,
     run_vlm_grounding_harness,
 )
 from rare_agents.models import AppProfile, CaseSubmission, EngineResult, SystemSettings
@@ -143,7 +144,17 @@ def _executor_request(provider: Any, messages: list[dict[str, Any]], *, max_toke
             with urllib_request.urlopen(request, timeout=120) as response:
                 response_payload = json.loads(response.read().decode("utf-8", errors="replace"))
             return _extract_chat_content(response_payload)
-        except (urllib_error.URLError, urllib_error.HTTPError, RemoteDisconnected, TimeoutError, ConnectionError, OSError) as exc:
+        except urllib_error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace").strip()
+            except Exception:
+                detail = ""
+            last_error = RuntimeError(f"HTTP Error {exc.code}: {exc.reason}. {detail[:1000]}".strip())
+            if attempt == 2:
+                break
+            time.sleep(1.0 + attempt)
+        except (urllib_error.URLError, RemoteDisconnected, TimeoutError, ConnectionError, OSError) as exc:
             last_error = exc
             if attempt == 2:
                 break
@@ -160,17 +171,36 @@ def _image_content(prompt: str, image_payload: dict[str, str]) -> list[dict[str,
     ]
 
 
-def _image_data_url_content(prompt: str, data_url: str) -> list[dict[str, Any]]:
-    return [
-        {"type": "image_url", "image_url": {"url": data_url}},
-        {"type": "text", "text": prompt},
-    ]
+def _image_data_url_content(prompt: str, data_urls: Any) -> list[dict[str, Any]]:
+    if isinstance(data_urls, str):
+        return [
+            {"type": "image_url", "image_url": {"url": data_urls}},
+            {"type": "text", "text": prompt},
+        ]
+    if isinstance(data_urls, list) and any(isinstance(item, dict) for item in data_urls):
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for item in data_urls:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("data_url", "")).strip()
+            if not url:
+                continue
+            label = str(item.get("label", "")).strip()
+            name = str(item.get("name", "")).strip()
+            if label or name:
+                content.append({"type": "text", "text": "\n".join(part for part in [name, label] if part)})
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        return content
+    urls = [str(item).strip() for item in data_urls if str(item).strip()] if isinstance(data_urls, list) else []
+    content = [{"type": "image_url", "image_url": {"url": url}} for url in urls]
+    content.append({"type": "text", "text": prompt})
+    return content
 
 
 def _request_json_with_image(
     provider: Any,
     *,
-    data_url: str,
+    data_url: Any,
     prompt: str,
     max_tokens: int,
     system_prompt: str,
@@ -196,7 +226,7 @@ def _request_json_with_image(
 
 
 def _harness_requester(provider: Any):
-    def request_json(data_url: str, prompt: str, max_tokens: int, system_prompt: str) -> dict[str, Any]:
+    def request_json(data_url: Any, prompt: str, max_tokens: int, system_prompt: str) -> dict[str, Any]:
         return _request_json_with_image(
             provider,
             data_url=data_url,
@@ -265,15 +295,94 @@ def _request_grounding(
     parent_output: dict[str, Any] | None = None,
     harness_text: str = "",
     max_tokens: int = 2200,
+    require_boundary: bool = True,
 ) -> dict[str, Any]:
     del prompt, relationship, harness_text, max_tokens
+    if not require_boundary:
+        return run_vlm_bbox_grounding_harness(
+            request_json=_harness_requester(provider),
+            image_payload=image_payload,
+            step=step,
+            target_label=target_label,
+            parent_output=parent_output,
+        )
     return run_vlm_grounding_harness(
         request_json=_harness_requester(provider),
         image_payload=image_payload,
         step=step,
         target_label=target_label,
         parent_output=parent_output,
+        require_boundary=require_boundary,
     )
+
+
+_GENERIC_GROUNDING_LABELS = {
+    "",
+    "target region",
+    "boundary points",
+    "boundary point",
+    "instance boundary",
+    "boundary",
+    "region mask",
+    "mask",
+    "roi",
+    "sparse landmark",
+}
+
+
+def _clean_grounding_target_text(value: str) -> str:
+    text = re.sub(r"[_\-]+", " ", str(value or "")).strip()
+    text = re.sub(r"\s+", " ", text)
+    for splitter in [
+        r"\s+with\s+",
+        r"\s+as\s+",
+        r"\s+for\s+",
+        r"\s+using\s+",
+        r"\s+to\s+",
+    ]:
+        parts = re.split(splitter, text, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) > 1 and len(parts[0].split()) >= 2:
+            text = parts[0]
+            break
+    text = re.sub(
+        r"\b(boundary|boundaries|points|point|mask|masks|segmentation|binary|evidence|region|roi|rasterize|rasterized)\b",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s+", " ", text).strip(" .,-_")
+    return text
+
+
+def _derive_grounding_target_label(step: dict[str, Any]) -> str:
+    tool_config = step.get("tool_config") if isinstance(step.get("tool_config"), dict) else {}
+    seg_type = _clean_grounding_target_text(str(tool_config.get("seg_type") or ""))
+    if seg_type and seg_type.lower() not in _GENERIC_GROUNDING_LABELS:
+        return seg_type
+    finding = str(step.get("finding") or "").strip()
+    if finding and finding.lower() not in _GENERIC_GROUNDING_LABELS:
+        return finding
+    action = str(step.get("action") or "").strip()
+    text = re.sub(r"\s+", " ", action)
+    for pattern in [
+        r"^ground\s+the\s+",
+        r"^ground\s+boundary\s+points\s+of\s+",
+        r"^ground\s+boundary\s+points\s+for\s+",
+        r"^ground\s+",
+        r"^localize\s+",
+        r"^segment\s+",
+        r"^trace\s+",
+        r"^identify\s+",
+        r"\s+using\s+boundary-point\s+evidence.*$",
+        r"\s+to\s+generate\s+binary\s+segmentation\s+mask.*$",
+        r"\s+for\s+quantitative.*$",
+        r"\s+from\s+masks.*$",
+    ]:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bboundary points\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bbinary segmentation mask\b", "", text, flags=re.IGNORECASE)
+    text = text.strip(" .,-_")
+    return text or "target region"
 
 
 def _run_evidence_vlm_step(
@@ -284,7 +393,7 @@ def _run_evidence_vlm_step(
     outputs: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
     parent_output = outputs.get(int(step.get("relative_to_step") or 0)) if step.get("relative_to_step") else None
-    target_label = str((step.get("tool_config") or {}).get("seg_type") or step.get("finding") or "target region").replace("_", " ")
+    target_label = _derive_grounding_target_label(step)
     evidence = _request_grounding(
         provider,
         step=step,
@@ -295,6 +404,7 @@ def _run_evidence_vlm_step(
         parent_output=parent_output,
         harness_text=build_harness_constraints(step, parent_output),
         max_tokens=1800,
+        require_boundary=True,
     )
     return {
         "artifact_type": "grounding",
@@ -309,8 +419,87 @@ def _run_evidence_vlm_step(
     }
 
 
+def _is_measurement_coding_step(step: dict[str, Any]) -> bool:
+    text = f"{step.get('finding') or ''} {step.get('action') or ''}".lower()
+    measurement_terms = {
+        "area",
+        "aspect",
+        "calculate",
+        "compute",
+        "diameter",
+        "height",
+        "length",
+        "measure",
+        "metric",
+        "perimeter",
+        "quantify",
+        "ratio",
+        "size",
+        "width",
+    }
+    synthesis_terms = {
+        "assessment",
+        "bi-rads",
+        "birads",
+        "classification",
+        "diagnosis",
+        "recommendation",
+        "report",
+        "synthesize",
+    }
+    return any(term in text for term in measurement_terms) and not any(term in text for term in synthesis_terms)
+
+
+def _run_structured_coding_step(step: dict[str, Any], *, outputs: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    parent_ids = [int(parent) for parent in step.get("input_type", []) if int(parent) != 0]
+    parents = [outputs[parent] for parent in parent_ids if parent in outputs]
+    if len(parents) != len(parent_ids):
+        missing = [parent for parent in parent_ids if parent not in outputs]
+        raise ValueError(f"Coding step is missing upstream parent output(s): {', '.join(str(item) for item in missing)}")
+    evidence_items: list[dict[str, Any]] = []
+    confidences: list[float] = []
+    for parent in parents:
+        evidence = parent.get("evidence") if isinstance(parent.get("evidence"), dict) else {}
+        confidence = evidence.get("confidence")
+        if isinstance(confidence, (int, float)):
+            confidences.append(float(confidence))
+        evidence_items.append(
+            {
+                "step_id": parent.get("step_id"),
+                "artifact_type": evidence.get("artifact_type"),
+                "finding": parent.get("finding"),
+                "conclusion": evidence.get("conclusion"),
+                "confidence": evidence.get("confidence"),
+                "rationale": evidence.get("rationale"),
+                "measurements": evidence.get("measurements"),
+                "has_grounding": bool((evidence.get("grounding") or {}).get("bbox")),
+            }
+        )
+    if not evidence_items:
+        raise ValueError("Coding step has no upstream evidence to aggregate.")
+    if not confidences:
+        raise ValueError("Structured coding step requires at least one upstream confidence-bearing evidence item.")
+    aggregate_confidence = round(sum(confidences) / len(confidences), 6)
+    return {
+        "artifact_type": "structured_coding",
+        "logical_output_path": step.get("output_path"),
+        "conclusion": "structured_evidence_aggregated",
+        "confidence": aggregate_confidence,
+        "rationale": "Aggregated upstream measurements and indicators according to the executable plan.",
+        "structured_inputs": evidence_items,
+        "structured_assessment": {
+            "action": step.get("action"),
+            "input_step_ids": parent_ids,
+            "measurement_steps": [item for item in evidence_items if item.get("measurements")],
+            "indicator_steps": [item for item in evidence_items if not item.get("measurements")],
+        },
+    }
+
+
 def _run_coding_step(step: dict[str, Any], *, outputs: dict[int, dict[str, Any]]) -> dict[str, Any]:
     parents = [outputs[parent] for parent in step.get("input_type", []) if parent in outputs]
+    if not _is_measurement_coding_step(step):
+        return _run_structured_coding_step(step, outputs=outputs)
     return {
         "artifact_type": "measurements",
         "logical_output_path": step.get("output_path"),
@@ -366,35 +555,15 @@ def _run_text_vlm_step(step: dict[str, Any], *, provider: Any, outputs: dict[int
     }
 
 
-def _first_grounded_parent(outputs: dict[int, dict[str, Any]]) -> tuple[int | None, dict[str, Any] | None]:
-    for step_id in sorted(outputs):
-        grounding = parent_grounding(outputs[step_id])
-        if grounding.get("bbox") and grounding.get("boundary_points"):
-            return step_id, outputs[step_id]
-    return None, None
-
-
 def _relationship_from_step_or_context(step: dict[str, Any], outputs: dict[int, dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:
     relationship = str(step.get("relationship") or "").strip().lower()
     relative_to_step = step.get("relative_to_step")
-    parent_output = outputs.get(int(relative_to_step)) if relative_to_step else None
-    if relationship and parent_output:
-        return relationship, parent_output
-    parent_step_id, inferred_parent = _first_grounded_parent(outputs)
-    if inferred_parent is None:
-        return relationship, parent_output
-    text = f"{step.get('finding') or ''} {step.get('action') or ''}".lower()
-    if any(term in text for term in ["margin", "echogenicity", "echo", "orientation", "shape", "texture"]):
-        step["relative_to_step"] = parent_step_id
-        step["relationship"] = "same_target"
-        step["parent_label"] = step.get("parent_label") or "primary lesion"
-        return "same_target", inferred_parent
-    if any(term in text for term in ["posterior", "acoustic", "enhancement", "shadow"]):
-        step["relative_to_step"] = parent_step_id
-        step["relationship"] = "deep_to_parent"
-        step["parent_label"] = step.get("parent_label") or "primary lesion"
-        return "deep_to_parent", inferred_parent
-    return relationship, parent_output
+    if not relative_to_step:
+        return relationship, None
+    parent_id = int(relative_to_step)
+    if parent_id not in outputs:
+        raise ValueError(f"Executor step {step.get('id')} references missing parent step {parent_id}.")
+    return relationship, outputs[parent_id]
 
 
 def _run_same_target_indicator_step(
@@ -423,7 +592,7 @@ def _run_same_target_indicator_step(
                         Finding: {finding}
                         Step action: {step.get('action') or ''}
                         Grounded region bbox: {parent.get('bbox')}
-                        Positive point: {parent.get('positive_point')}
+                        Grounded boundary points: {parent.get('boundary_points')}
 
                         Return ONLY JSON:
                         {{
@@ -447,13 +616,17 @@ def _run_same_target_indicator_step(
     parsed = _parse_llm_json(raw)
     if not isinstance(parsed, dict):
         raise ValueError("Same-target indicator response must be a JSON object.")
+    if not parent.get("bbox"):
+        raise ValueError("Same-target indicator requires parent bbox evidence.")
     return {
         "artifact_type": "grounded_indicator",
         "logical_output_path": step.get("output_path"),
         "conclusion": str(parsed.get("conclusion", "")).strip() or "Uncertain",
         "confidence": clamp01(parsed.get("confidence", 0.0)),
         "rationale": str(parsed.get("rationale", "")).strip(),
-        "grounding": parent,
+        "grounding": {
+            "bbox": parent["bbox"],
+        },
         "validation": {"valid": True, "source": "same_target_parent_grounding"},
         "harness": {
             "enabled": True,
@@ -493,6 +666,7 @@ def _run_vlm_step(
             parent_output=parent_output,
             harness_text=build_harness_constraints(step, parent_output),
             max_tokens=2200,
+            require_boundary=False,
         ),
     }
 
@@ -544,6 +718,12 @@ def _executor_markdown(records: list[dict[str, Any]]) -> str:
     return "\n".join(rows)
 
 
+def _emit_progress(progress_callback: Callable[[dict[str, Any]], None] | None, payload: dict[str, Any]) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(payload)
+
+
 def run_executor_case(
     submission: CaseSubmission,
     profile: AppProfile,
@@ -551,6 +731,7 @@ def run_executor_case(
     *,
     image_payloads: list[dict[str, Any]] | None = None,
     plan_bundle: dict[str, Any] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> EngineResult:
     del profile
     provider = _resolve_executor_provider(settings)
@@ -579,7 +760,28 @@ def run_executor_case(
 
     outputs: dict[int, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
+    _emit_progress(
+        progress_callback,
+        {
+            "status": "running",
+            "stage": "ready",
+            "active_step_id": None,
+            "records": records,
+            "plan_display_steps": plan["display_steps"],
+        },
+    )
     for step in plan["steps"]:
+        step_id = int(step.get("id") or 0)
+        _emit_progress(
+            progress_callback,
+            {
+                "status": "running",
+                "stage": "executing",
+                "active_step_id": step_id,
+                "records": records,
+                "plan_display_steps": plan["display_steps"],
+            },
+        )
         try:
             record = _execute_step(
                 step,
@@ -588,11 +790,42 @@ def run_executor_case(
                 outputs=outputs,
             )
         except Exception as exc:
+            _emit_progress(
+                progress_callback,
+                {
+                    "status": "failed",
+                    "stage": "failed",
+                    "active_step_id": None,
+                    "failed_step_id": step_id,
+                    "records": records,
+                    "plan_display_steps": plan["display_steps"],
+                },
+            )
             raise ValueError(f"Executor step {step.get('id')} failed: {exc}") from exc
         if vision_probe and isinstance(record.get("evidence"), dict) and record["evidence"].get("grounding"):
             record["evidence"]["vision_probe"] = vision_probe
         outputs[int(step["id"])] = record
         records.append(record)
+        _emit_progress(
+            progress_callback,
+            {
+                "status": "running",
+                "stage": "executing",
+                "active_step_id": None,
+                "records": records,
+                "plan_display_steps": plan["display_steps"],
+            },
+        )
+    _emit_progress(
+        progress_callback,
+        {
+            "status": "running",
+            "stage": "rendering",
+            "active_step_id": None,
+            "records": records,
+            "plan_display_steps": plan["display_steps"],
+        },
+    )
     try:
         display_records = compose_execution_display(
             provider=provider,
@@ -608,6 +841,16 @@ def run_executor_case(
         if step_id not in display_by_id:
             raise ValueError(f"Executor display composition missed step {step_id}.")
         record["display"] = display_by_id[step_id]
+    _emit_progress(
+        progress_callback,
+        {
+            "status": "completed",
+            "stage": "completed",
+            "active_step_id": None,
+            "records": records,
+            "plan_display_steps": plan["display_steps"],
+        },
+    )
 
     return EngineResult(
         title=f"Executor 执行：{submission.chief_complaint or '当前任务'}",
