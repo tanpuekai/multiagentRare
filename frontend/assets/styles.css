@@ -150,7 +150,8 @@ a {
 }
 
 .sidebar-toggle-button,
-.sidebar-diagnostics-button {
+.sidebar-diagnostics-button,
+.sidebar-newchat-button {
   width: 42px;
   height: 42px;
   padding: 0;
@@ -170,6 +171,8 @@ a {
 .sidebar-toggle-button:focus-visible,
 .sidebar-diagnostics-button:hover,
 .sidebar-diagnostics-button:focus-visible,
+.sidebar-newchat-button:hover,
+.sidebar-newchat-button:focus-visible,
 .sidebar-diagnostics-button.is-active {
   background: rgba(148, 163, 184, 0.22);
   color: var(--accent-strong);
@@ -179,12 +182,15 @@ a {
 .sidebar-toggle-button:hover,
 .sidebar-toggle-button:focus-visible,
 .sidebar-diagnostics-button:hover,
-.sidebar-diagnostics-button:focus-visible {
+.sidebar-diagnostics-button:focus-visible,
+.sidebar-newchat-button:hover,
+.sidebar-newchat-button:focus-visible {
   transform: translateY(-1px);
 }
 
 .sidebar-toggle-button::after,
 .sidebar-diagnostics-button::after,
+.sidebar-newchat-button::after,
 .sidebar-settings-button::after {
   left: calc(100% + 10px);
   right: auto;
@@ -194,6 +200,7 @@ a {
 
 .sidebar-toggle-button::before,
 .sidebar-diagnostics-button::before,
+.sidebar-newchat-button::before,
 .sidebar-settings-button::before {
   left: calc(100% + 4px);
   right: auto;
@@ -213,6 +220,10 @@ a {
 .sidebar-diagnostics-button:hover::before,
 .sidebar-diagnostics-button:focus-visible::after,
 .sidebar-diagnostics-button:focus-visible::before,
+.sidebar-newchat-button:hover::after,
+.sidebar-newchat-button:hover::before,
+.sidebar-newchat-button:focus-visible::after,
+.sidebar-newchat-button:focus-visible::before,
 .sidebar-settings-button:hover::after,
 .sidebar-settings-button:hover::before,
 .sidebar-settings-button:focus-visible::after,
@@ -451,6 +462,10 @@ a {
 .sidebar-diagnostics-button:hover::before,
 .sidebar-diagnostics-button:focus-visible::after,
 .sidebar-diagnostics-button:focus-visible::before,
+.sidebar-newchat-button:hover::after,
+.sidebar-newchat-button:hover::before,
+.sidebar-newchat-button:focus-visible::after,
+.sidebar-newchat-button:focus-visible::before,
 .sidebar-settings-button:hover::after,
 .sidebar-settings-button:hover::before,
 .sidebar-settings-button:focus-visible::after,

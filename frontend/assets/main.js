@@ -16,6 +16,7 @@
     users: "M16 11a3 3 0 1 0-2.999-3A3 3 0 0 0 16 11zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm0 2c-2.9 0-5 1.45-5 3.5V20h10v-2.5C13 15.45 10.9 14 8 14zm8 0c-.66 0-1.28.08-1.86.22 1.15.7 1.86 1.72 1.86 3.28V20h5v-2.1c0-2.15-2.07-3.9-5-3.9z",
     hub: "M12 3v4M5 8l3 2M19 8l-3 2M12 21v-4M5 16l3-2M19 16l-3-2M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
     diagnostics: "M3 12h4l2.1-3.6 3 8.4 3.2-9.8 2 5H21",
+    newChat: "M15.8 4.9A8 8 0 0 0 4.2 12.1M4.4 13.8A8 8 0 0 0 18.8 14.3M12 8.8v6.4M8.8 12h6.4",
     spark: "M12 3l1.8 4.8L18 9.6l-4.2 1.2L12 15.6l-1.8-4.8L6 9.6l4.2-1.8z",
     chevronLeft: "M15 6 9 12l6 6",
     panelToggle: "M4.5 5.5h15v13h-15zM9 5.5v13M14.5 9.25 11.5 12l3 2.75",
@@ -938,6 +939,7 @@
     showDiagnosticsToggle,
     diagnosticsOpen,
     onToggleDiagnostics,
+    onNewChat,
     settingsMenuOpen,
     onToggleSettingsMenu,
   }) {
@@ -965,6 +967,15 @@
                 data-tooltip="诊断面板"
               >
                 <${Icon} name="diagnostics" size=${27} />
+              </button>
+
+              <button
+                className=${cx("tooltip-button", "sidebar-newchat-button")}
+                onClick=${onNewChat}
+                aria-label="新建对话"
+                data-tooltip="新建对话"
+              >
+                <${Icon} name="newChat" size=${27} />
               </button>
             `}
           </div>
@@ -3389,6 +3400,42 @@
       setPendingSubmission(null);
     }
 
+    function hasComposerDraft() {
+      const defaultComposer = makeDefaultComposer(meta, settings);
+      return Boolean(
+        composer.case_summary.trim() ||
+          composer.case_blocks.length ||
+          composer.chief_complaint.trim() ||
+          composer.patient_age.trim() ||
+          composer.patient_sex !== defaultComposer.patient_sex ||
+          composer.insurance_type !== defaultComposer.insurance_type ||
+          composer.department !== defaultComposer.department ||
+          composer.output_style !== defaultComposer.output_style ||
+          composer.urgency !== defaultComposer.urgency ||
+          composer.show_process !== defaultComposer.show_process ||
+          composer.image_files.length ||
+          composer.doc_files.length
+      );
+    }
+
+    function startNewChat() {
+      const hasDraft = hasComposerDraft();
+      const hasContext = Boolean(currentSession || pendingSubmission);
+      const shouldReturnToWorkspace = activeView !== "workspace";
+      if (!hasDraft && !hasContext && !shouldReturnToWorkspace) {
+        return;
+      }
+      closeHistoryPreview();
+      setCurrentSession(null);
+      setPendingSubmission(null);
+      setSettingsMenuOpen(false);
+      setDiagnosticsOpen(false);
+      setActiveView("workspace");
+      if (hasDraft || hasContext) {
+        resetComposer();
+      }
+    }
+
     async function submitCase() {
       const trimmedInput = composer.case_summary.trim();
       if (trimmedInput === "/clear") {
@@ -3752,6 +3799,7 @@
           showDiagnosticsToggle=${activeView === "workspace"}
           diagnosticsOpen=${diagnosticsOpen}
           onToggleDiagnostics=${() => setDiagnosticsOpen((current) => !current)}
+          onNewChat=${startNewChat}
           settingsMenuOpen=${settingsMenuOpen}
           onToggleSettingsMenu=${() => setSettingsMenuOpen((current) => !current)}
         />
