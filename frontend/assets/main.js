@@ -46,9 +46,22 @@
 
   const SLASH_MENU_TREE = [
     {
+      id: "taskType",
+      label: "任务类型",
+      hint: "快速指定输出目标",
+      searchText: "诊断意见 治疗规划 康复计划 分析规划 任务类型",
+      children: [
+        { id: "analysisPlan", label: "请提供分析规划", tokenLabel: "任务类型·请提供分析规划" },
+        { id: "diagnosticOpinion", label: "请做出诊断意见", tokenLabel: "任务类型·请做出诊断意见" },
+        { id: "treatmentPlan", label: "请做出治疗规划", tokenLabel: "任务类型·请做出治疗规划" },
+        { id: "rehabPlan", label: "请做出康复计划", tokenLabel: "任务类型·请做出康复计划" },
+      ],
+    },
+    {
       id: "gender",
       label: "性别",
       hint: "患者性别",
+      dividerBefore: true,
       searchText: "男 女 未知 性别",
       children: [
         { id: "male", label: "男", tokenLabel: "性别·男", value: "male" },
@@ -133,17 +146,6 @@
         { id: "routine", label: "常规", tokenLabel: "紧急程度·常规" },
         { id: "priority", label: "加急", tokenLabel: "紧急程度·加急" },
         { id: "critical", label: "危重", tokenLabel: "紧急程度·危重" },
-      ],
-    },
-    {
-      id: "taskType",
-      label: "任务类型",
-      hint: "快速指定输出目标",
-      searchText: "诊断意见 治疗规划 康复计划 任务类型",
-      children: [
-        { id: "diagnosticOpinion", label: "请做出诊断意见", tokenLabel: "任务类型·请做出诊断意见" },
-        { id: "treatmentPlan", label: "请做出治疗规划", tokenLabel: "任务类型·请做出治疗规划" },
-        { id: "rehabPlan", label: "请做出康复计划", tokenLabel: "任务类型·请做出康复计划" },
       ],
     },
   ];
@@ -550,7 +552,7 @@
     void wrap;
     const viewportMargin = 14;
     const estimatedMenuWidth = 560;
-    const estimatedMenuHeight = 360;
+    const estimatedMenuHeight = 430;
     const left = Math.max(viewportMargin, Math.min(rect.left, window.innerWidth - estimatedMenuWidth - viewportMargin));
     const spaceBelow = window.innerHeight - rect.bottom - viewportMargin;
     const spaceAbove = rect.top - viewportMargin;
@@ -2188,7 +2190,7 @@
                           type="button"
                           className=${cx(
                             "slash-menu-item",
-                            item.id === "taskType" && "has-divider",
+                            item.dividerBefore && "has-divider",
                             !slashMenu.path.length && index === slashMenu.activeIndex && "is-active",
                             slashMenu.path[0] === item.id && "is-selected"
                           )}
@@ -2208,7 +2210,6 @@
                         >
                           <div className="slash-menu-copy">
                             <span className="slash-menu-label">${item.label}</span>
-                            ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
                           </div>
                           ${item.children && html`<span className="slash-menu-arrow">›</span>`}
                         </button>
@@ -2238,7 +2239,6 @@
                           >
                             <div className="slash-menu-copy">
                               <span className="slash-menu-label">${item.label}</span>
-                              ${item.hint && html`<span className="slash-menu-hint">${item.hint}</span>`}
                             </div>
                           </button>
                         `
