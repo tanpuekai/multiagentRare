@@ -12,9 +12,11 @@ from rare_agents.intake_parser import parse_ehr_intake
 from rare_agents.service import (
     DEPARTMENTS,
     OUTPUT_STYLES,
+    create_executor_job,
     create_managed_account,
     delete_managed_account,
     get_bootstrap_payload,
+    get_executor_job,
     get_session,
     list_account_summaries,
     load_settings,
@@ -205,6 +207,26 @@ async def diagnose(request: Request) -> dict:
     except ValueError as exc:
         logger.exception("diagnose failed for user=%s detail=%s", user.get("username"), exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/executor-jobs")
+async def create_executor_job_api(request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return {"job": create_executor_job(user["username"], payload)}
+    except ValueError as exc:
+        logger.exception("executor job create failed for user=%s detail=%s", user.get("username"), exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/executor-jobs/{job_id}")
+def executor_job_detail(job_id: str, request: Request) -> dict:
+    user = require_user(request)
+    job = get_executor_job(user["username"], job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Executor job not found.")
+    return {"job": job}
 
 
 @app.get("/{full_path:path}", response_class=HTMLResponse)

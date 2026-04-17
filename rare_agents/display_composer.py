@@ -59,6 +59,13 @@ ALLOWED_LATIN_TERMS = [
     "CK",
     "LDH",
     "VLM",
+    "cm",
+    "mm",
+    "ml",
+    "mL",
+    "kg",
+    "mg",
+    "mmHg",
 ]
 
 
@@ -276,8 +283,12 @@ def _compact_grounding(value: object) -> dict[str, Any]:
         boundary_points = value.get("polygon")
     compact = {
         "bbox": _compact_coord_list(value.get("bbox") or value.get("coarse_bbox"), expected_len=4),
+        "mask_bbox": _compact_coord_list(value.get("mask_bbox"), expected_len=4),
         "positive_point": _compact_coord_list(value.get("positive_point"), expected_len=2),
         "boundary_point_count": len(boundary_points) if isinstance(boundary_points, list) else 0,
+        "mask_size": _compact_coord_list(value.get("mask_size"), expected_len=2),
+        "mask_row_count": len(value.get("mask_spans")) if isinstance(value.get("mask_spans"), list) else 0,
+        "mask_area_ratio_image": round(float(value.get("mask_area_ratio_image")), 4) if isinstance(value.get("mask_area_ratio_image"), (int, float)) else 0,
     }
     return {key: item for key, item in compact.items() if item not in ([], "", 0)}
 

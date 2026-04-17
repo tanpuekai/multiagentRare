@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from base64 import b64encode
+from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+import threading
 from typing import Any
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -69,6 +72,9 @@ def _build_vision_test_image_data_url() -> str:
 
 
 VISION_TEST_IMAGE_DATA_URL = _build_vision_test_image_data_url()
+
+EXECUTOR_JOBS: dict[str, dict[str, Any]] = {}
+EXECUTOR_JOBS_LOCK = threading.Lock()
 
 SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录", "账户管理"]
 DEPARTMENTS = [item.value for item in DepartmentOption]
@@ -950,7 +956,11 @@ def test_provider_connection(payload: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(last_message)
 
 
-def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _timestamp_now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _prepare_case_request(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings(username)
     profile = load_profile(username)
     sessions = load_sessions(username)
@@ -977,7 +987,6 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("请先输入病例摘要，或在已有上下文中继续执行。")
 
     prefill = parse_ehr_intake(main_text, settings.default_department)
-
     incoming_submission = CaseSubmission(
         department=_select_value(payload, "department", prefill.department or settings.default_department),
         output_style=_select_value(payload, "output_style", prefill.output_style or OUTPUT_STYLES[0]),
@@ -998,31 +1007,33 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
         incoming_submission,
     )
     planner_image_payloads = _analysis_payloads_from_submission(submission)
+    plan_bundle = _latest_planner_bundle(active_session) if executor_requested else None
+    if executor_requested and plan_bundle is None:
+        raise ValueError("当前上下文中没有可执行的诊断计划。请先调用 @Planner 生成 plan。")
+    return {
+        "settings": settings,
+        "profile": profile,
+        "prefill": prefill,
+        "raw_text": raw_text,
+        "active_session_id": active_session.session_id if active_session else "",
+        "submission": submission,
+        "planner_image_payloads": planner_image_payloads,
+        "executor_requested": executor_requested,
+        "planner_requested": planner_requested,
+        "plan_bundle": plan_bundle,
+    }
 
-    if executor_requested:
-        plan_bundle = _latest_planner_bundle(active_session)
-        if plan_bundle is None:
-            raise ValueError("当前上下文中没有可执行的诊断计划。请先调用 @Planner 生成 plan。")
-        result = run_executor_case(
-            submission=submission,
-            profile=profile,
-            settings=settings,
-            image_payloads=planner_image_payloads,
-            plan_bundle=plan_bundle,
-        )
-    elif planner_requested:
-        result = run_planner_case(
-            submission=submission,
-            profile=profile,
-            settings=settings,
-            image_payloads=planner_image_payloads,
-        )
-    else:
-        result = (
-            _run_single_model_provider_case(submission=submission, profile=profile, settings=settings)
-            if submission.single_model_test
-            else run_multiagent_case(submission=submission, profile=profile, settings=settings)
-        )
+
+def _persist_case_result(
+    username: str,
+    *,
+    submission: CaseSubmission,
+    result: EngineResult,
+    raw_text: str,
+    active_session_id: str = "",
+) -> dict[str, Any]:
+    sessions = load_sessions(username)
+    active_session = next((session for session in sessions if session.session_id == active_session_id), None) if active_session_id else None
     if active_session and not active_session.session_id.startswith("history-"):
         turn_timestamp = QueryHistoryItem.from_result(submission, result).timestamp
         active_session.timestamp = turn_timestamp
@@ -1064,15 +1075,177 @@ def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     history = [history_item] + load_history(username)
     save_sessions(username, sessions)
     save_history(username, history)
-
     return {
         "session": serialize_session(session),
         "result": asdict(result),
         "submission": asdict(submission),
-        "prefill": asdict(prefill),
         "history": [serialize_history_item(item, f"history-{index}") for index, item in enumerate(history, start=1)],
         "sessions": [serialize_session(item, include_details=False) for item in sessions],
     }
+
+
+def _serialize_executor_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job_id": str(job.get("job_id", "")),
+        "status": str(job.get("status", "")),
+        "stage": str(job.get("stage", "")),
+        "created_at": str(job.get("created_at", "")),
+        "updated_at": str(job.get("updated_at", "")),
+        "active_step_id": job.get("active_step_id"),
+        "failed_step_id": job.get("failed_step_id"),
+        "step_count": int(job.get("step_count", 0)),
+        "completed_step_ids": [int(item) for item in job.get("completed_step_ids", [])],
+        "plan_display_steps": deepcopy(job.get("plan_display_steps", [])),
+        "execution_records": deepcopy(job.get("execution_records", [])),
+        "error_message": str(job.get("error_message", "")),
+        "session": deepcopy(job.get("session")),
+        "sessions": deepcopy(job.get("sessions", [])),
+    }
+
+
+def _update_executor_job(job_id: str, **changes: Any) -> dict[str, Any] | None:
+    with EXECUTOR_JOBS_LOCK:
+        job = EXECUTOR_JOBS.get(job_id)
+        if job is None:
+            return None
+        for key, value in changes.items():
+            job[key] = deepcopy(value)
+        job["updated_at"] = _timestamp_now()
+        return deepcopy(job)
+
+
+def _executor_progress_callback(job_id: str):
+    def callback(event: dict[str, Any]) -> None:
+        records = [dict(item) for item in event.get("records", []) if isinstance(item, dict)]
+        _update_executor_job(
+            job_id,
+            status=str(event.get("status") or "running"),
+            stage=str(event.get("stage") or "running"),
+            active_step_id=event.get("active_step_id"),
+            failed_step_id=event.get("failed_step_id"),
+            completed_step_ids=[int(item.get("step_id") or 0) for item in records if int(item.get("step_id") or 0)],
+            execution_records=records,
+            plan_display_steps=list(event.get("plan_display_steps") or []),
+        )
+
+    return callback
+
+
+def _run_executor_job(job_id: str, username: str, prepared: dict[str, Any]) -> None:
+    try:
+        result = run_executor_case(
+            submission=prepared["submission"],
+            profile=prepared["profile"],
+            settings=prepared["settings"],
+            image_payloads=prepared["planner_image_payloads"],
+            plan_bundle=prepared["plan_bundle"],
+            progress_callback=_executor_progress_callback(job_id),
+        )
+        response = _persist_case_result(
+            username,
+            submission=prepared["submission"],
+            result=result,
+            raw_text=prepared["raw_text"],
+            active_session_id=prepared["active_session_id"],
+        )
+        _update_executor_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            active_step_id=None,
+            failed_step_id=None,
+            completed_step_ids=[int(item.get("step_id") or 0) for item in result.execution_records if int(item.get("step_id") or 0)],
+            execution_records=result.execution_records,
+            session=response["session"],
+            sessions=response["sessions"],
+            error_message="",
+        )
+    except Exception as exc:
+        _update_executor_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            active_step_id=None,
+            error_message=str(exc),
+        )
+
+
+def create_executor_job(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+    prepared = _prepare_case_request(username, payload)
+    if not prepared["executor_requested"]:
+        raise ValueError("Executor job endpoint requires an @Executor request.")
+    created_at = _timestamp_now()
+    job_id = uuid4().hex[:12]
+    initial_job = {
+        "job_id": job_id,
+        "username": username,
+        "status": "queued",
+        "stage": "queued",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "active_step_id": None,
+        "failed_step_id": None,
+        "step_count": len(list((prepared["plan_bundle"] or {}).get("steps") or [])),
+        "completed_step_ids": [],
+        "plan_display_steps": list((prepared["plan_bundle"] or {}).get("display_steps") or []),
+        "execution_records": [],
+        "error_message": "",
+        "session": None,
+        "sessions": [],
+    }
+    with EXECUTOR_JOBS_LOCK:
+        EXECUTOR_JOBS[job_id] = initial_job
+    worker = threading.Thread(
+        target=_run_executor_job,
+        args=(job_id, username, prepared),
+        daemon=True,
+        name=f"executor-job-{job_id}",
+    )
+    worker.start()
+    return _serialize_executor_job(initial_job)
+
+
+def get_executor_job(username: str, job_id: str) -> dict[str, Any] | None:
+    with EXECUTOR_JOBS_LOCK:
+        job = EXECUTOR_JOBS.get(job_id)
+        if job is None or str(job.get("username")) != username:
+            return None
+        return _serialize_executor_job(job)
+
+
+def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+    prepared = _prepare_case_request(username, payload)
+    submission = prepared["submission"]
+    if prepared["executor_requested"]:
+        result = run_executor_case(
+            submission=submission,
+            profile=prepared["profile"],
+            settings=prepared["settings"],
+            image_payloads=prepared["planner_image_payloads"],
+            plan_bundle=prepared["plan_bundle"],
+        )
+    elif prepared["planner_requested"]:
+        result = run_planner_case(
+            submission=submission,
+            profile=prepared["profile"],
+            settings=prepared["settings"],
+            image_payloads=prepared["planner_image_payloads"],
+        )
+    else:
+        result = (
+            _run_single_model_provider_case(submission=submission, profile=prepared["profile"], settings=prepared["settings"])
+            if submission.single_model_test
+            else run_multiagent_case(submission=submission, profile=prepared["profile"], settings=prepared["settings"])
+        )
+    response = _persist_case_result(
+        username,
+        submission=submission,
+        result=result,
+        raw_text=prepared["raw_text"],
+        active_session_id=prepared["active_session_id"],
+    )
+    response["prefill"] = asdict(prepared["prefill"])
+    return response
 
 
 def get_session(username: str, session_id: str) -> CaseSessionRecord | None:
