@@ -503,8 +503,14 @@ def _build_grounding_views(
         guided_image = _draw_grid(context.image, label="full-image normalized coordinate frame")
         return [
             HarnessView(
+                name="original-full",
+                label="View 1: original full image; use this view to recognize the medical target",
+                data_url=context.data_url,
+                bounds=None,
+            ),
+            HarnessView(
                 name="coordinate-full",
-                label="View 1: full grayscale image with coordinate tick marks; coordinates are normalized to this whole image",
+                label="View 2: same full image with dense coordinate grid; use this view to calibrate normalized x/y coordinates",
                 data_url=_image_to_data_url(guided_image, media_type=context.media_type),
                 bounds=None,
             )
@@ -521,29 +527,27 @@ def _build_grounding_views(
 
 def _draw_grid(image: Image.Image, *, label: str) -> Image.Image:
     canvas = image.convert("RGB").copy()
-    draw = ImageDraw.Draw(canvas)
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     w, h = canvas.size
-    frame_color = (242, 185, 36)
-    tick_color = (245, 224, 151)
-    label_bg = (255, 255, 255)
-    draw.rectangle([0, 0, max(0, w - 1), max(0, h - 1)], outline=frame_color, width=2)
-    for idx in range(0, 9):
-        x = round(w * idx / 8)
-        y = round(h * idx / 8)
-        text = f"{idx}/8"
-        tick = 10 if idx in {0, 4, 8} else 6
-        draw.line([(x, 0), (x, tick)], fill=tick_color, width=2)
-        draw.line([(x, max(0, h - tick)), (x, max(0, h - 1))], fill=tick_color, width=2)
-        draw.line([(0, y), (tick, y)], fill=tick_color, width=2)
-        draw.line([(max(0, w - tick), y), (max(0, w - 1), y)], fill=tick_color, width=2)
-        draw.rectangle([min(max(0, x + 2), max(0, w - 32)), 0, min(max(22, x + 30), w), 14], fill=label_bg)
-        draw.text((min(max(2, x + 3), max(2, w - 30)), 1), text, fill=(30, 30, 30))
-        draw.rectangle([0, min(max(0, y + 2), max(0, h - 16)), 22, min(max(14, y + 16), h)], fill=label_bg)
-        draw.text((2, min(max(2, y + 3), max(2, h - 14))), text, fill=(30, 30, 30))
+    label_bg = (255, 255, 255, 190)
+    for idx in range(0, 11):
+        x = round((w - 1) * idx / 10)
+        y = round((h - 1) * idx / 10)
+        is_major = idx in {0, 5, 10}
+        line_color = (242, 185, 36, 120) if is_major else (0, 210, 235, 72)
+        line_width = 2 if is_major else 1
+        draw.line([(x, 0), (x, max(0, h - 1))], fill=line_color, width=line_width)
+        draw.line([(0, y), (max(0, w - 1), y)], fill=line_color, width=line_width)
+        text = f"{idx / 10:.1f}"
+        draw.rectangle([min(max(0, x + 2), max(0, w - 34)), 0, min(max(34, x + 36), w), 14], fill=label_bg)
+        draw.text((min(max(2, x + 4), max(2, w - 32)), 1), text, fill=(30, 30, 30, 255))
+        draw.rectangle([0, min(max(0, y + 2), max(0, h - 16)), 34, min(max(16, y + 18), h)], fill=label_bg)
+        draw.text((2, min(max(2, y + 4), max(2, h - 14))), text, fill=(30, 30, 30, 255))
     if label:
         draw.rectangle([0, max(0, h - 22), min(w, 12 + len(label) * 7), h], fill=label_bg)
-        draw.text((6, max(0, h - 18)), label[:80], fill=(0, 0, 0))
-    return canvas
+        draw.text((6, max(0, h - 18)), label[:80], fill=(0, 0, 0, 255))
+    return Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
 
 
 def _mask_from_spans(mask_size: list[int], mask_spans: list[list[Any]]) -> np.ndarray:
@@ -752,49 +756,12 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _normalize_text(value: object) -> str:
-    text = " ".join(str(value or "").split()).strip()
-    return text
-
-
-def _knowledge_decomposition(
-    *,
-    target_label: str,
-    step: dict[str, Any],
-    relationship: str,
-    parent_bbox: list[float] | None,
-) -> str:
-    action = _normalize_text(step.get("action"))
-    finding = _normalize_text(step.get("finding"))
-    scope = "relative evidence region" if parent_bbox and relationship else "single visible target or strongest supporting local evidence region"
-    relation_line = (
-        f"- Treat the request as parent-anchored evidence and satisfy the stated relation `{relationship}` before tracing the boundary."
-        if parent_bbox and relationship
-        else "- Treat the request as one coherent visual target, not as scattered hints or multiple disconnected candidates."
-    )
-    return dedent(
-        f"""
-        Visible evidence decomposition:
-        - Do not localize a diagnosis name directly. Translate the request into visible evidence first.
-        - Requested target text: {target_label}
-        - Step finding: {finding or 'not provided'}
-        - Step action: {action or 'not provided'}
-        - Resolve the request into one {scope}.
-        - Evaluate the candidate using these visible axes together: outer extent, boundary/margin, internal pattern or density/intensity/echo, local contrast versus surrounding tissue, and spatial/anatomical position.
-        {relation_line}
-        - If the label is abstract, choose the smallest contiguous region whose visible cues most directly support this step.
-        - If the finding describes a property of an already grounded target, preserve the same target extent unless the action explicitly asks for a different relative region.
-        """
-    ).strip()
-
-
 def _segmentation_boundary_rules() -> str:
     return dedent(
         """
         ROI boundary protocol:
         - Return ordered ROI boundary points that trace the true visible lesion boundary.
-        - Return exactly 32 boundary point pairs in the selected_view coordinate frame.
-        - Internally count the pairs before responding; do not return 15, 16, or any number other than 32.
+        - Return 12 to 20 raw boundary point pairs in the selected_view coordinate frame; the application will resample them for display.
         - Points must run around one closed contour in clockwise or counterclockwise order with no self-intersection.
         - Include all meaningful shape changes: poles, corners, lobulations, indentations, and flat segments.
         - Even for a simple oval lesion, include intermediate points along each arc instead of only a few extremal points.
@@ -806,45 +773,15 @@ def _segmentation_boundary_rules() -> str:
     ).strip()
 
 
-def _analysis_protocol() -> str:
+def _modality_artifact_protocol() -> str:
     return dedent(
         """
-        Analysis protocol:
-        - Use the full image to identify the correct anatomy and reject labels, rulers, overlays, and background.
-        - Trace the requested target directly in the full-image coordinate frame.
-        - Return boundary points normalized to the entire full image.
-        - Do not use crop-local, panel-local, or displayed-pixel coordinates.
-        """
-    ).strip()
-
-
-def _extent_protocol(*, task_kind: str, target_scope: str, relationship: str) -> str:
-    if task_kind == "locate_primary_target":
-        return dedent(
-            """
-            Extent protocol for the primary target:
-            - Trace the full visible outer boundary of the requested entity.
-            - Do not shrink to only the darkest core, brightest core, central cavity, strongest contrast patch, or most salient subregion.
-            - Include a thin rim, wall, or low-contrast outer edge only when it is part of the target itself.
-            - Exclude secondary imaging effects around the target, including posterior acoustic shadowing or enhancement, surrounding echogenic tissue bands, edema, halo artifact, ruler/text overlays, and empty background.
-            - For ultrasound mass or lesion targets, trace the mass body at the true tissue interface; do not wrap the contour around adjacent bright parenchyma or acoustic artifacts.
-            - Prefer complete coverage of the visible entity over conservative under-coverage.
-            """
-        ).strip()
-    if relationship and target_scope == "relative_region":
-        return dedent(
-            """
-            Extent protocol for a relative evidence region:
-            - Localize the contiguous region that satisfies the stated parent-relative relation.
-            - Do not collapse the region to a tiny point-like cue when a broader anchored area is visibly present.
-            """
-        ).strip()
-    return dedent(
-        """
-        Extent protocol for supporting evidence:
-        - Return the smallest contiguous local region that directly supports this step.
-        - Do not expand the boundary to unrelated surrounding tissue.
-        - Exclude secondary artifacts and surrounding normal structures unless the step explicitly asks for them.
+        Modality-aware artifact rejection:
+        - Infer the modality from the image itself and bind the ROI to the physical target, not to the diagnosis word.
+        - For ultrasound-like images, a lesion, mass, cyst, or nodule ROI is the coherent bounded object body at its outer tissue or fluid interface.
+        - Posterior acoustic shadowing, enhancement, reverberation, diffuse texture changes, and speckle-only patches are evidence context, not part of the ROI.
+        - If a deeper acoustic effect lies below a smaller bounded focus, localize the bounded focus and exclude the deeper effect.
+        - For non-ultrasound images, use the visible anatomical boundary appropriate to the target label and ignore labels, overlays, rulers, and background.
         """
     ).strip()
 
@@ -1134,7 +1071,7 @@ def _boundary_global_prompt(
         coordinate_guidance = (
             "The attached images are two views of the same full image with identical dimensions and identical normalized coordinates.\n"
             "Use original-full to recognize the target. Use coordinate-full only to calibrate x/y locations.\n"
-            "Trace boundary_points in this full-image coordinate frame; do not use crop-local or display-local coordinates."
+            "Return selected_view=\"coordinate-full\" and trace boundary_points in this full-image coordinate frame; do not use crop-local or display-local coordinates."
         )
     elif "coordinate-full" in view_names:
         coordinate_guidance = (
@@ -1151,50 +1088,32 @@ def _boundary_global_prompt(
     image_lines = "\n".join(f"- {view.name}: {view.label}" for view in image_views)
     return dedent(
         f"""
-        You are the executor-side grounding model for a clinical agent workflow.
-        You are not diagnosing. You are executing a single visual localization task.
+        You localize one visible medical image target for a clinical agent workflow. Do not diagnose.
 
-        Task contract:
+        Target contract:
         - target_label: {contract['target_label']}
         - step_action: {step.get('action') or ''}
         - task_kind: {contract['task_kind']}
         - target_scope: {contract['target_scope']}
         - relationship: {contract['relationship']}
-        - evidence_mode: {contract['evidence_mode']}
-        - output_contract: selected_view_plus_roi_boundary_points
-        - coordinate_frame: normalized coordinates of the selected view
         {parent_text}
 
-        Binding rule:
-        - target_label is the exact object or evidence region to localize.
-        - step_action gives downstream context only; do not expand the ROI to extra concepts mentioned in step_action.
-
-        Coordinate view:
+        Views:
         {view_lines}
 
-        Images attached to this request:
+        Attached images:
         {image_lines}
 
         {coordinate_guidance}
 
-        {_knowledge_decomposition(
-            target_label=target_label,
-            step=step,
-            relationship=contract["relationship"],
-            parent_bbox=parent_bbox,
-        )}
+        Single-pass procedure:
+        - Use the image to translate target_label into one visible physical target. Do not localize a diagnosis word directly.
+        - step_action gives context only; do not expand the ROI to additional concepts mentioned there.
+        - Select one coherent target body or evidence region, not scattered hints or multiple disconnected candidates.
+        - If parent_bbox is provided, satisfy the relationship before tracing the target.
+        - Spatial priors are secondary hints. If a prior conflicts with visible evidence, trust the image.
 
-        {_analysis_protocol()}
-
-        {_extent_protocol(
-            task_kind=contract["task_kind"],
-            target_scope=contract["target_scope"],
-            relationship=contract["relationship"],
-        )}
-
-        Soft-prior handling:
-        - Spatial priors are secondary hints.
-        - If a soft prior conflicts with the visible image evidence, trust the visible image evidence.
+        {_modality_artifact_protocol()}
 
         Return ONLY JSON:
         {{
@@ -1208,20 +1127,15 @@ def _boundary_global_prompt(
         }}
 
         Rules:
-        - Prefer selected_view="{preferred_view}" because it has the coordinate guide; the coordinate frame is identical to original-full.
+        - selected_view must be "{preferred_view}".
         - selected_view must be exactly one of: {', '.join(view.name for view in selectable_views)}.
         - Coordinate convention: x increases left to right; y increases top to bottom; [0,0] is the top-left corner; [1,1] is the bottom-right corner.
-        - Use the full image to refine the exact spatial extent of the requested target.
-        - selected_view identifies the image in which you traced the ROI boundary.
         - boundary_points must be normalized floats in [0, 1] relative to the selected_view image.
         - positive_point must be a normalized point clearly inside the same target.
         - coarse_bbox must tightly cover the same target and all returned boundary points.
         {_segmentation_boundary_rules()}
-        - Do not return only a circle, ellipse, or generic box approximation.
-        - If multiple candidates exist, choose the single dominant target requested by the step.
         - Do not point to labels, ruler marks, measurement text, caliper text, or empty background.
         - Do not output mask rows or a point-only answer.
-        - The polygon formed by boundary_points must correspond to the visible target extent in the selected_view coordinate frame.
         {build_harness_constraints(step, None)}
         """
     ).strip()
