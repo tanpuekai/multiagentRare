@@ -10,8 +10,10 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from rare_agents.display_composer import compose_plan_display
+from rare_agents.display_composer import compose_plan_display_projection
+from rare_agents.grounding_harness import _build_grounding_views, prepare_harness_image
 from rare_agents.models import AppProfile, CaseSubmission, EngineResult, SystemSettings
+from rare_agents.provider_client import StreamCallback, request_chat_completion_stream
 
 
 PLANNER_AGENT_NAME = "Planner"
@@ -387,11 +389,31 @@ def _normalize_tool_config(item: dict[str, Any], action_type: str, tools: list[i
     if isinstance(raw, dict) and raw.get("tool_type"):
         normalized = dict(raw)
         if normalized.get("tool_type") == "evidence_vlm":
+            normalized.pop("target_anchor", None)
+            target_label = _derive_target_label(
+                raw_target_label=normalized.get("target_label"),
+                raw_seg_type=normalized.get("seg_type"),
+                action=str(item.get("action") or ""),
+                finding=finding,
+            )
             normalized["seg_type"] = _normalize_seg_type(
                 normalized.get("seg_type"),
                 action=str(item.get("action") or ""),
                 finding=finding,
             )
+            if (
+                normalized["seg_type"] in _GENERIC_SEG_TYPES
+                or len(str(normalized["seg_type"])) > 72
+                or "downstream" in str(normalized["seg_type"])
+            ) and not _is_generic_target_label(target_label):
+                normalized["seg_type"] = _slugify_target(target_label) or "target_region"
+            normalized["target_label"] = target_label
+            normalized["roi_definition"] = _normalize_roi_definition("", target_label)
+            normalized["include"] = _default_include_regions(target_label)
+            normalized["exclude"] = _normalize_text_list(normalized.get("exclude")) or _default_exclude_regions()
+            input_type_values = [int(value) for value in item.get("input_type", [0]) if str(value).strip().lstrip("-").isdigit()]
+            if 0 in input_type_values and not normalized.get("relationship"):
+                normalized.pop("spatial_priors", None)
             normalized["evidence_mode"] = "boundary_points"
         if normalized.get("tool_type") == "vlm":
             normalized["evidence_mode"] = "bbox"
@@ -402,8 +424,28 @@ def _normalize_tool_config(item: dict[str, Any], action_type: str, tools: list[i
         return normalized
     if action_type == "quantitative":
         if any(tool == 2 for tool in tools):
+            target_label = _derive_target_label(
+                raw_target_label=item.get("target_label"),
+                raw_seg_type=item.get("seg_type"),
+                action=str(item.get("action") or ""),
+                finding=finding,
+            )
             seg_type = _normalize_seg_type(item.get("seg_type"), action=str(item.get("action") or ""), finding=finding)
-            return {"tool_type": "evidence_vlm", "seg_type": seg_type, "evidence_mode": "boundary_points"}
+            if (
+                seg_type in _GENERIC_SEG_TYPES
+                or len(str(seg_type)) > 72
+                or "downstream" in str(seg_type)
+            ) and not _is_generic_target_label(target_label):
+                seg_type = _slugify_target(target_label) or "target_region"
+            return {
+                "tool_type": "evidence_vlm",
+                "seg_type": seg_type,
+                "target_label": target_label,
+                "roi_definition": _normalize_roi_definition("", target_label),
+                "include": _default_include_regions(target_label),
+                "exclude": _default_exclude_regions(),
+                "evidence_mode": "boundary_points",
+            }
         return {"tool_type": "coding"}
     image_step = any(tool == 1 for tool in tools) and 0 in [int(value) for value in item.get("input_type", [0])]
     return {
@@ -433,7 +475,14 @@ def _infer_finding_from_action(action: str) -> str:
 
 _GENERIC_SEG_TYPES = {
     "",
+    "abnormality",
+    "finding",
+    "lesion",
+    "mass",
+    "nodule",
+    "object",
     "target_region",
+    "target",
     "boundary_points",
     "instance_boundary",
     "boundary_point",
@@ -442,12 +491,52 @@ _GENERIC_SEG_TYPES = {
     "region_mask",
     "roi",
     "sparse_landmark",
+    "structure",
 }
+
+
+_GENERIC_TARGET_LABELS = {item.replace("_", " ") for item in _GENERIC_SEG_TYPES} | {
+    "current finding",
+    "diagnostic finding",
+    "image finding",
+    "region",
+    "visible target",
+}
+
+
+def _compact_text(value: object, *, max_len: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" .,-_")
+    return text[:max_len].strip()
+
+
+def _normalize_target_label_text(value: object) -> str:
+    text = _compact_text(value, max_len=140)
+    text = re.sub(r"^(the|a|an)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(complete|entire|full|requested)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^visible\s+extent\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^boundary\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^outer\s+boundary\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+for\s+downstream.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+for\s+quantitative.*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" .,-_")
+    return text
+
+
+def _slugify_target(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9_]+", "_", str(value or "").lower()).strip("_")
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug[:72].strip("_")
+
+
+def _is_generic_target_label(value: object) -> bool:
+    text = re.sub(r"[_\-]+", " ", str(value or "").lower()).strip()
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return not text or text in _GENERIC_TARGET_LABELS
 
 
 def _derive_seg_phrase(action: str, finding: str | None) -> str:
     text = re.sub(r"\s+", " ", str(action or "")).strip()
-    lowered = text.lower()
     replacements = [
         r"^ground\s+the\s+",
         r"^ground\s+boundary\s+points\s+of\s+",
@@ -478,16 +567,66 @@ def _derive_seg_phrase(action: str, finding: str | None) -> str:
     return text
 
 
+def _derive_target_label(
+    *,
+    raw_target_label: object,
+    raw_seg_type: object,
+    action: str,
+    finding: str | None,
+) -> str:
+    for value in [raw_target_label, _derive_seg_phrase(action, finding), raw_seg_type, finding]:
+        text = _normalize_target_label_text(value)
+        if text and not _is_generic_target_label(text):
+            return text
+    return _normalize_target_label_text(_derive_seg_phrase(action, finding)) or "target region"
+
+
+def _normalize_text_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [_compact_text(item, max_len=140) for item in value if _compact_text(item, max_len=140)]
+
+
+def _default_include_regions(target_label: str) -> list[str]:
+    if not target_label or _is_generic_target_label(target_label):
+        return []
+    return ["full visible extent of the requested target"]
+
+
+def _default_exclude_regions() -> list[str]:
+    return ["adjacent non-target structures", "background", "text labels", "rulers", "calipers", "non-target artifacts"]
+
+
+def _normalize_roi_definition(value: object, target_label: str) -> str:
+    text = _compact_text(value or _default_roi_definition(target_label), max_len=260)
+    if text and "target-to-surrounding" not in text.lower() and "surrounding tissue" not in text.lower():
+        text = _compact_text(f"{text}. Use the outermost target-to-surrounding transition as the final contour.", max_len=340)
+    return text
+
+
+def _default_roi_definition(target_label: str) -> str:
+    if not target_label or _is_generic_target_label(target_label):
+        return ""
+    return (
+        f"Delineate full visible extent of {target_label}. Place boundary on target-to-surrounding-tissue transition. "
+        "Do not trace only the most salient core if the target has broader visible extent."
+    )
+
+
 def _normalize_seg_type(raw_seg_type: object, *, action: str, finding: str | None) -> str:
     raw_text = re.sub(r"[_\-]+", " ", str(raw_seg_type or "").lower()).strip()
     raw_text = _derive_seg_phrase(raw_text, finding)
     seg_type = re.sub(r"[^a-z0-9_]+", "_", raw_text).strip("_")
-    if seg_type not in _GENERIC_SEG_TYPES:
+    if seg_type and seg_type not in _GENERIC_SEG_TYPES:
         return seg_type
     phrase = _derive_seg_phrase(action, finding)
     normalized = re.sub(r"[^a-z0-9_]+", "_", phrase.lower()).strip("_")
     normalized = re.sub(r"_+", "_", normalized).strip("_")
-    return normalized or "target_region"
+    if normalized and normalized not in _GENERIC_SEG_TYPES:
+        return normalized
+    return "target_region"
 
 
 def _is_placeholder_finding(finding: str | None) -> bool:
@@ -525,7 +664,81 @@ def _safe_image_payloads(image_payloads: list[dict[str, Any]] | None) -> list[di
     return cleaned
 
 
-def _planner_request(provider: Any, messages: list[dict[str, Any]], *, max_tokens: int) -> str:
+def _visual_profile_image_payloads(image_payloads: list[dict[str, str]]) -> list[dict[str, str]]:
+    views: list[dict[str, str]] = []
+    for payload in image_payloads:
+        context = prepare_harness_image(payload)
+        for view in _build_grounding_views(context, parent_bbox=None, relationship=""):
+            if not view.data_url:
+                continue
+            views.append(
+                {
+                    "name": f"{payload.get('name') or 'uploaded_image'}:{view.name}",
+                    "media_type": context.media_type,
+                    "label": view.label,
+                    "data_url": view.data_url,
+                }
+            )
+        if len(views) >= 4:
+            break
+    return views[:4]
+
+
+def _clamp01_number(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, number))
+
+
+def _normalize_anchor_point(value: object) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return []
+    x = _clamp01_number(value[0])
+    y = _clamp01_number(value[1])
+    if x is None or y is None:
+        return []
+    return [round(x, 6), round(y, 6)]
+
+
+def _normalize_anchor_bbox(value: object) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return []
+    coords = [_clamp01_number(item) for item in value]
+    if any(item is None for item in coords):
+        return []
+    x1, y1, x2, y2 = [float(item) for item in coords]
+    left, right = sorted([x1, x2])
+    top, bottom = sorted([y1, y2])
+    if right - left < 0.005 or bottom - top < 0.005:
+        return []
+    return [round(left, 6), round(top, 6), round(right, 6), round(bottom, 6)]
+
+
+def _normalize_target_anchor(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    anchor: dict[str, Any] = {}
+    point = _normalize_anchor_point(value.get("point"))
+    bbox = _normalize_anchor_bbox(value.get("bbox"))
+    location = _compact_text(value.get("location"), max_len=120)
+    if point:
+        anchor["point"] = point
+    if bbox:
+        anchor["bbox"] = bbox
+    if location:
+        anchor["location"] = location
+    return anchor
+
+
+def _planner_request(
+    provider: Any,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int,
+    stream_callback: StreamCallback | None = None,
+) -> str:
     url = f"{_normalize_provider_endpoint(provider.endpoint).rstrip('/')}/chat/completions"
     body: dict[str, Any] = {
         "model": provider.model_name,
@@ -533,6 +746,14 @@ def _planner_request(provider: Any, messages: list[dict[str, Any]], *, max_token
         "max_tokens": max_tokens,
         "temperature": 0,
     }
+    if stream_callback is not None:
+        return request_chat_completion_stream(
+            url=url,
+            api_key=provider.api_key,
+            body=body,
+            user_agent="RareMDT-Planner/0.2",
+            on_delta=stream_callback,
+        )
     payload = json.dumps(body).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
@@ -582,6 +803,7 @@ def _visual_retrieval_prompt(submission: CaseSubmission) -> str:
           "task_kind": "locate_primary_target|assess_grounded_target|localize_relative_region|multimodal_review|mixed_visual_review",
           "target_scope": "entity|local_region|relative_region|diffuse_pattern|unknown",
           "primary_target": "",
+          "primary_target_anchor": {{"point": [0.0, 0.0], "bbox": [0.0, 0.0, 0.0, 0.0], "location": ""}},
           "retrieval_tags": ["", ""],
           "salient_targets": ["", ""],
           "confidence": 0.0
@@ -593,6 +815,11 @@ def _visual_retrieval_prompt(submission: CaseSubmission) -> str:
         - target_scope must describe what kind of region the executor is expected to ground.
         - primary_target should be the main visible physical entity or evidence region that downstream grounding should focus on first.
         - primary_target must be visually concrete rather than diagnostic or generic; prefer phrases such as "dominant hypoechoic mass body", "optic disc", "retinal hemorrhage", or "focal opacity" when supported by the image.
+        - primary_target_anchor identifies the same primary target in normalized full-image coordinates.
+        - primary_target_anchor.point must be a point inside the primary target when the target is visible.
+        - primary_target_anchor.bbox must be a coarse bounding box around the primary target, normalized as [x1, y1, x2, y2].
+        - primary_target_anchor.location must be a short visual location phrase that can disambiguate this target from similar nearby structures.
+        - If a coordinate-grid view is provided, use it to calibrate primary_target_anchor coordinates in the original full-image frame.
         - retrieval_tags and salient_targets should be short, concrete phrases useful for planning.
         - confidence must be a number in [0, 1].
         """
@@ -602,6 +829,9 @@ def _visual_retrieval_prompt(submission: CaseSubmission) -> str:
 def _multimodal_user_content(prompt: str, image_payloads: list[dict[str, str]]) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for item in image_payloads:
+        label = "\n".join(part for part in [str(item.get("name", "")).strip(), str(item.get("label", "")).strip()] if part)
+        if label:
+            parts.append({"type": "text", "text": label})
         parts.append({"type": "image_url", "image_url": {"url": item["data_url"]}})
     return parts
 
@@ -610,6 +840,7 @@ def _request_visual_profile(
     submission: CaseSubmission,
     settings: SystemSettings,
     image_payloads: list[dict[str, Any]] | None,
+    stream_callback: StreamCallback | None = None,
 ) -> tuple[dict[str, Any], str, str]:
     provider = _resolve_planner_provider(settings)
     payloads = _safe_image_payloads(image_payloads)
@@ -617,6 +848,7 @@ def _request_visual_profile(
         raise ValueError("Planner provider is not configured.")
     if not payloads:
         raise ValueError("Planner visual retrieval requires uploaded image content.")
+    profile_payloads = _visual_profile_image_payloads(payloads)
     raw = _planner_request(
         provider,
         [
@@ -626,10 +858,11 @@ def _request_visual_profile(
             },
             {
                 "role": "user",
-                "content": _multimodal_user_content(_visual_retrieval_prompt(submission), payloads),
+                "content": _multimodal_user_content(_visual_retrieval_prompt(submission), profile_payloads),
             },
         ],
-        max_tokens=1200,
+        max_tokens=1600,
+        stream_callback=stream_callback,
     )
     parsed = _parse_llm_json(raw)
     if not isinstance(parsed, dict):
@@ -642,6 +875,7 @@ def _request_visual_profile(
         "task_kind": str(parsed.get("task_kind", "mixed_visual_review")).strip() or "mixed_visual_review",
         "target_scope": str(parsed.get("target_scope", "unknown")).strip() or "unknown",
         "primary_target": str(parsed.get("primary_target", "")).strip(),
+        "primary_target_anchor": _normalize_target_anchor(parsed.get("primary_target_anchor")),
         "retrieval_tags": [str(item).strip() for item in parsed.get("retrieval_tags", []) if str(item).strip()],
         "salient_targets": [str(item).strip() for item in parsed.get("salient_targets", []) if str(item).strip()],
         "confidence": max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0))),
@@ -667,6 +901,7 @@ def _planner_prompt(
         - task_kind: {visual_profile.get('task_kind') or 'mixed_visual_review'}
         - target_scope: {visual_profile.get('target_scope') or 'unknown'}
         - primary_target: {visual_profile.get('primary_target') or 'unspecified'}
+        - primary_target_anchor: {json.dumps(visual_profile.get('primary_target_anchor') or {}, ensure_ascii=False)}
         - salient_targets: {_join_items([str(item) for item in visual_profile.get('salient_targets', []) if item])}
         """
         if visual_profile
@@ -705,6 +940,7 @@ def _planner_prompt(
         - Add finding for every qualitative step; quantitative steps may set finding to null.
         - Never use placeholder findings such as "current finding", "target finding", "Step 4", "abnormality", or "diagnostic finding".
         - Every qualitative finding must name the concrete visual/clinical indicator being checked.
+        - A qualitative finding must never just restate the user's instruction such as "give a diagnosis", "analyze the image", or "generate a plan".
         - id starts from 1 and increases by 1.
         - tool is an array of integer tool ids from the available toolset.
         - action_type is "qualitative" or "quantitative".
@@ -720,10 +956,24 @@ def _planner_prompt(
         - Each action must be operational and specific. Avoid vague wording such as "analyze the image" or "check the current finding".
         - Do NOT include report generation, decider fusion, HITL text, or human-facing SOP wording.
         - For qualitative VLM evidence-check steps, include tool_config with tool_type "vlm", an rv_config, and evidence_mode "bbox"; these steps must be grounded only with a bbox.
+        - For qualitative VLM evidence-check steps, finding must name the concrete observable sign or property to verify in the image.
         - For qualitative text interpretation steps, use tool_config.tool_type = "text_vlm".
         - Use tool_config.tool_type = "evidence_vlm" with evidence_mode "boundary_points" only when the step needs an actual mask/contour for a visible object that will be measured or reused as a parent ROI.
         - Do not use evidence_vlm merely to show a qualitative imaging sign, artifact, enhancement, shadow, texture, margin, or pattern. Those evidence-check steps must use tool_type "vlm" and evidence_mode "bbox".
-        - For evidence_vlm steps, include a concise seg_type naming the target object, not an imaging sign unless the sign itself is explicitly being measured as a region.
+        - For evidence_vlm steps, include tool_config.target_label as a concise concrete physical ROI label that the executor can segment directly.
+        - Keep target_label short. Do not put task verbs, "complete", "entire", measurement intent, or boundary instructions in target_label; put boundary semantics in roi_definition.
+        - Do not set tool_config.target_label to a generic word alone, such as "lesion", "mass", "target", "abnormality", "finding", or "region". Use a specific phrase such as "dominant cystic lesion body in left breast ultrasound", "optic disc", or "focal opacity".
+        - Do not copy Visual task profile coordinates into the execution plan by default; the Executor will localize from the image with its own coordinate harness.
+        - Use spatial words from the visual profile only when needed to disambiguate similar targets, and keep them in spatial_priors.
+        - For evidence_vlm steps, include a concise seg_type naming the target object; seg_type may be a compact slug, but target_label must remain human-readable and concrete.
+        - For evidence_vlm steps, include a compact tool_config.roi_definition describing the exact boundary to trace.
+        - For evidence_vlm steps, include tool_config.include and tool_config.exclude arrays when the target may be confused with artifacts, adjacent anatomy, shadows, enhancement, labels, rulers, or background.
+        - In evidence_vlm include, list only physical parts of the requested target body itself.
+        - target_label should name the target entity, not its imaging texture. Prefer "dominant breast ultrasound lesion" over "dominant anechoic cystic structure"; put anechoic, hypoechoic, cystic, bright, dark, smooth, irregular, or similar visual attributes in spatial_priors, finding, or roi_definition.
+        - Avoid diagnostic labels in target_label when the diagnosis is not already known; use neutral visible entity names.
+        - Never put contextual imaging signs, artifacts, downstream qualitative findings, shadows, posterior enhancement, labels, rulers, calipers, or surrounding tissue in evidence_vlm include. Put those in exclude or create a separate bbox-only VLM evidence step.
+        - A mask/contour step must segment only the parent target body needed for measurement; signs around that target must not enlarge the ROI.
+        - Example evidence_vlm tool_config shape: {{"tool_type":"evidence_vlm","seg_type":"dominant_breast_ultrasound_lesion","target_label":"dominant breast ultrasound lesion","roi_definition":"Delineate the full visible extent of the requested target. Put the boundary on the visual transition between the target and surrounding tissue. Do not trace only the brightest or most salient core if the target has a broader visible extent.","include":["full visible extent of the requested target"],"exclude":["adjacent structures","background","text labels","rulers","calipers","posterior acoustic artifacts"],"evidence_mode":"boundary_points","target_scope":"entity"}}.
         - For deterministic computation, use tool_config.tool_type = "coding".
         - Coding steps may only depend on upstream evidence_vlm mask steps that provide boundary_points; do not feed bbox-only qualitative indicators into geometry computation.
         - When a grounded region depends on a previously localized parent region, also include relative_to_step, relationship, and parent_label.
@@ -791,6 +1041,10 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
             "tool_config": _normalize_tool_config(item, action_type, tools, finding),
         }
         for optional_key in [
+            "target_label",
+            "roi_definition",
+            "include",
+            "exclude",
             "target_scope",
             "evidence_mode",
             "relative_to_step",
@@ -803,6 +1057,12 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
                 record[optional_key] = item[optional_key]
             elif optional_key in raw_tool_config:
                 record[optional_key] = raw_tool_config[optional_key]
+        if record["tool_config"].get("tool_type") == "evidence_vlm":
+            for contract_key in ["target_label", "roi_definition", "include", "exclude", "evidence_mode", "target_scope"]:
+                if contract_key in record["tool_config"]:
+                    record[contract_key] = record["tool_config"][contract_key]
+            if 0 in input_type and not record.get("relationship"):
+                record.pop("spatial_priors", None)
         if record["tool_config"].get("tool_type") == "vlm" and "relative_to_step" not in record:
             nonzero_inputs = [parent for parent in input_type if parent != 0]
             if len(nonzero_inputs) == 1:
@@ -819,6 +1079,7 @@ def _request_llm_plan(
     settings: SystemSettings,
     rag_text: str,
     visual_profile: dict[str, Any] | None,
+    stream_callback: StreamCallback | None = None,
 ) -> tuple[list[dict[str, Any]], str, str, Any]:
     provider = _resolve_planner_provider(settings)
     if provider is None:
@@ -833,6 +1094,7 @@ def _request_llm_plan(
             {"role": "user", "content": _planner_prompt(submission, profile, rag_text, visual_profile)},
         ],
         max_tokens=4096,
+        stream_callback=stream_callback,
     )
     steps = _validate_steps(_parse_llm_json(content))
     return steps, provider.provider_name, provider.model_name, provider
@@ -859,6 +1121,7 @@ def compile_plan(
     settings: SystemSettings,
     *,
     image_payloads: list[dict[str, Any]] | None = None,
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     payloads = _safe_image_payloads(image_payloads)
     visual_profile = None
@@ -871,7 +1134,7 @@ def compile_plan(
         if not payloads:
             raise ValueError("Planner needs the uploaded image content to perform retrieval.")
         try:
-            visual_profile, planner_provider, planner_model = _request_visual_profile(submission, settings, payloads)
+            visual_profile, planner_provider, planner_model = _request_visual_profile(submission, settings, payloads, stream_callback)
         except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
             provider_label = " / ".join(item for item in [planner_provider, planner_model] if item) or "未配置接口"
             raise ValueError(
@@ -884,19 +1147,28 @@ def compile_plan(
 
     rag_text, rag_hits = _retrieve_planning_context(submission, visual_profile)
     try:
-        steps, plan_provider, plan_model, plan_provider_config = _request_llm_plan(submission, profile, settings, rag_text, visual_profile)
+        steps, plan_provider, plan_model, plan_provider_config = _request_llm_plan(
+            submission,
+            profile,
+            settings,
+            rag_text,
+            visual_profile,
+            stream_callback,
+        )
     except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
         raise ValueError(f"Planner plan generation failed: {exc}") from exc
+    display_quality_warnings: list[str] = []
     try:
-        display_steps = compose_plan_display(
+        display_steps, display_quality_warnings = compose_plan_display_projection(
             provider=plan_provider_config,
             submission=submission,
             plan_steps=steps,
             visual_profile=visual_profile,
             rag_text=rag_text,
+            stream_callback=stream_callback,
         )
     except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Planner display composition failed: {exc}") from exc
+        raise ValueError(f"Planner display structure composition failed: {exc}") from exc
 
     return {
         "steps": steps,
@@ -917,6 +1189,7 @@ def compile_plan(
             else "Generated the downstream execution plan from the submitted task."
         ),
         "visual_stage_used": visual_stage_used,
+        "display_quality_warnings": display_quality_warnings,
     }
 
 
@@ -926,12 +1199,14 @@ def run_planner_case(
     settings: SystemSettings,
     *,
     image_payloads: list[dict[str, Any]] | None = None,
+    stream_callback: StreamCallback | None = None,
 ) -> EngineResult:
     plan = compile_plan(
         submission=submission,
         profile=profile,
         settings=settings,
         image_payloads=image_payloads,
+        stream_callback=stream_callback,
     )
     steps = plan["steps"]
     display_steps = plan["display_steps"]
@@ -982,4 +1257,5 @@ def run_planner_case(
         activated_agent=PLANNER_AGENT_NAME,
         plan_steps=steps,
         plan_display_steps=display_steps,
+        display_quality_warnings=list(plan.get("display_quality_warnings") or []),
     )

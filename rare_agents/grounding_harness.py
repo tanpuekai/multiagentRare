@@ -765,8 +765,12 @@ def _segmentation_boundary_rules() -> str:
         - Points must run around one closed contour in clockwise or counterclockwise order with no self-intersection.
         - Include all meaningful shape changes: poles, corners, lobulations, indentations, and flat segments.
         - Even for a simple oval lesion, include intermediate points along each arc instead of only a few extremal points.
+        - Trace the complete visible target instance as an outer envelope; do not trace only a rim, wall, central core, upper edge, or partial arc.
+        - If the target has an internal core, rim, capsule, wall, or halo that belongs to the same target, place the contour on the outermost target-to-background transition, not on an internal core-to-rim transition.
+        - Include connected low-contrast portions that belong to the same target even when their border is less salient than the central core.
         - Put the contour on the target-to-background transition, not on a surrounding artifact, shadow, enhancement band, measurement mark, or label.
-        - If a connected low-contrast extension belongs to the same target, include it; if a bright rim, halo, or acoustic artifact is outside the target body, exclude it.
+        - Exclusion rules remove separate adjacent structures and artifacts; they must not shrink the requested target to its highest-contrast core.
+        - If a bright rim, halo, or acoustic artifact is outside the target body, exclude it.
         - Do not return a fitted circle, ellipse, coarse box, or a sparse anchor set.
         - When these points are connected, they should directly define a valid segmentation polygon for the target.
         """
@@ -778,7 +782,8 @@ def _modality_artifact_protocol() -> str:
         """
         Modality-aware artifact rejection:
         - Infer the modality from the image itself and bind the ROI to the physical target, not to the diagnosis word.
-        - For ultrasound-like images, a lesion, mass, cyst, or nodule ROI is the coherent bounded object body at its outer tissue or fluid interface.
+        - For ultrasound-like images, a lesion, mass, cyst, or nodule ROI is the coherent bounded object body at the outermost transition to surrounding tissue.
+        - For cystic, anechoic, rimmed, or walled targets, include the entire visible target body and belonging wall/rim; do not trace only the central dark core, inner fluid-wall interface, upper edge, or a partial arc.
         - Posterior acoustic shadowing, enhancement, reverberation, diffuse texture changes, and speckle-only patches are evidence context, not part of the ROI.
         - If a deeper acoustic effect lies below a smaller bounded focus, localize the bounded focus and exclude the deeper effect.
         - For non-ultrasound images, use the visible anatomical boundary appropriate to the target label and ignore labels, overlays, rulers, and background.
@@ -789,6 +794,12 @@ def _modality_artifact_protocol() -> str:
 def _harness_config(step: dict[str, Any]) -> dict[str, Any]:
     tool_config = step.get("tool_config") if isinstance(step.get("tool_config"), dict) else {}
     keys = [
+        "target_label",
+        "target_anchor",
+        "roi_definition",
+        "boundary_definition",
+        "include",
+        "exclude",
         "target_scope",
         "evidence_mode",
         "relative_to_step",
@@ -815,6 +826,9 @@ def _extract_grounding_object(payload: dict[str, Any]) -> dict[str, Any]:
         "selected_view": payload.get("selected_view", nested.get("selected_view")),
         "mask_size": payload.get("mask_size", nested.get("mask_size")),
         "mask_spans": payload.get("mask_spans", nested.get("mask_spans")),
+        "target_understanding": payload.get("target_understanding", nested.get("target_understanding", payload.get("target_description", nested.get("target_description", "")))),
+        "boundary_definition": payload.get("boundary_definition", nested.get("boundary_definition", "")),
+        "excluded_regions": payload.get("excluded_regions", nested.get("excluded_regions", [])),
         "conclusion": payload.get("conclusion", ""),
         "confidence": payload.get("confidence", nested.get("confidence")),
         "rationale": payload.get("rationale", nested.get("rationale", "")),
@@ -852,6 +866,13 @@ def _normalize_candidate(payload: dict[str, Any], *, views: list[HarnessView], c
     conclusion = str(obj.get("conclusion") or "").strip() or "localized"
     confidence = _require_confidence(obj, label="Grounding candidate")
     rationale = str(obj.get("rationale") or "").strip()
+    target_understanding = str(obj.get("target_understanding") or "").strip()
+    boundary_definition = str(obj.get("boundary_definition") or "").strip()
+    excluded_regions = _string_list(obj.get("excluded_regions"))
+    if not target_understanding:
+        raise ValueError("Grounding candidate must include target_understanding.")
+    if not boundary_definition:
+        raise ValueError("Grounding candidate must include boundary_definition.")
     if obj.get("boundary_points") is not None:
         positive_point = normalize_point(obj.get("positive_point"))
         coarse_bbox_local = normalize_bbox(obj.get("coarse_bbox"))
@@ -882,6 +903,9 @@ def _normalize_candidate(payload: dict[str, Any], *, views: list[HarnessView], c
             "conclusion": conclusion,
             "confidence": confidence,
             "rationale": rationale,
+            "target_understanding": target_understanding,
+            "boundary_definition": boundary_definition,
+            "excluded_regions": excluded_regions,
             "selected_view": selected_view.name,
             "selected_view_label": selected_view.label,
             "selected_view_bounds": list(selected_view.bounds) if selected_view.bounds else [0.0, 0.0, 1.0, 1.0],
@@ -904,9 +928,35 @@ def _normalize_candidate(payload: dict[str, Any], *, views: list[HarnessView], c
 def build_harness_constraints(step: dict[str, Any], parent_output: dict[str, Any] | None) -> str:
     config = _harness_config(step)
     lines: list[str] = []
+    finding = str(step.get("finding") or "").strip()
+    if finding:
+        lines.append(f"- Evidence focus: {finding}.")
     target_scope = str(config.get("target_scope", "") or "").strip()
     if target_scope:
         lines.append(f"- Target scope: {target_scope}.")
+    target_label = str(config.get("target_label", "") or "").strip()
+    if target_label:
+        lines.append(f"- Explicit target label: {target_label}.")
+    target_anchor = config.get("target_anchor")
+    if isinstance(target_anchor, dict):
+        anchor_parts: list[str] = []
+        if target_anchor.get("point"):
+            anchor_parts.append(f"point={target_anchor['point']}")
+        if target_anchor.get("bbox"):
+            anchor_parts.append(f"bbox={target_anchor['bbox']}")
+        if target_anchor.get("location"):
+            anchor_parts.append(f"location={target_anchor['location']}")
+        if anchor_parts:
+            lines.append(f"- Approximate target anchor for instance selection only: {'; '.join(anchor_parts)}.")
+    roi_definition = str(config.get("roi_definition") or config.get("boundary_definition") or "").strip()
+    if roi_definition:
+        lines.append(f"- ROI definition: {roi_definition}.")
+    include_regions = _string_list(config.get("include"))
+    if include_regions:
+        lines.append(f"- Include in ROI: {', '.join(include_regions)}.")
+    exclude_regions = _string_list(config.get("exclude"))
+    if exclude_regions:
+        lines.append(f"- Exclude from ROI: {', '.join(exclude_regions)}.")
     evidence_mode = str(config.get("evidence_mode", "") or "").strip()
     if evidence_mode:
         lines.append(f"- Evidence mode: {evidence_mode}.")
@@ -1086,12 +1136,14 @@ def _boundary_global_prompt(
         )
     view_lines = "\n".join(f"- {view.name}: {view.label}" for view in selectable_views)
     image_lines = "\n".join(f"- {view.name}: {view.label}" for view in image_views)
+    harness_constraints = build_harness_constraints(step, None)
     return dedent(
         f"""
         You localize one visible medical image target for a clinical agent workflow. Do not diagnose.
 
         Target contract:
         - target_label: {contract['target_label']}
+        - step_finding: {step.get('finding') or ''}
         - step_action: {step.get('action') or ''}
         - task_kind: {contract['task_kind']}
         - target_scope: {contract['target_scope']}
@@ -1106,9 +1158,20 @@ def _boundary_global_prompt(
 
         {coordinate_guidance}
 
+        ROI contract:
+        {harness_constraints or "- No additional ROI constraints supplied."}
+
         Single-pass procedure:
         - Use the image to translate target_label into one visible physical target. Do not localize a diagnosis word directly.
+        - If step_finding describes an attribute but target_label names the parent entity, segment the parent entity boundary rather than tracing only the attribute cue.
+        - If a target_anchor is supplied in the ROI contract, treat it as an approximate instance-selection cue.
+        - target_anchor must not clip, shrink, or replace the final contour; if the visible target extends beyond the anchor bbox, trace the full visible target boundary.
+        - If the approximate anchor slightly conflicts with the visible target boundary, trust the image boundary while keeping the same target instance.
         - step_action gives context only; do not expand the ROI to additional concepts mentioned there.
+        - Before outputting coordinates, state the concrete target in target_understanding and the exact contour rule in boundary_definition.
+        - The contour rule must prioritize the outermost complete visible target envelope over the most salient internal core.
+        - Exclude every region listed in the ROI contract even if it is visually adjacent to the target.
+        - Apply exclusions only to separate non-target regions; do not use exclusions to cut off a continuous low-contrast part of the requested target.
         - Select one coherent target body or evidence region, not scattered hints or multiple disconnected candidates.
         - If parent_bbox is provided, satisfy the relationship before tracing the target.
         - Spatial priors are secondary hints. If a prior conflicts with visible evidence, trust the image.
@@ -1120,6 +1183,9 @@ def _boundary_global_prompt(
           "selected_view": "{preferred_view}",
           "conclusion": "localized|not_visible|uncertain",
           "confidence": 0.0,
+          "target_understanding": "the concrete physical target you will segment",
+          "boundary_definition": "the exact visible boundary you traced",
+          "excluded_regions": ["region deliberately excluded from ROI"],
           "rationale": "short visual reason",
           "boundary_points": [[x, y], [x, y]],
           "positive_point": [x, y],
@@ -1133,10 +1199,11 @@ def _boundary_global_prompt(
         - boundary_points must be normalized floats in [0, 1] relative to the selected_view image.
         - positive_point must be a normalized point clearly inside the same target.
         - coarse_bbox must tightly cover the same target and all returned boundary points.
+        - target_understanding and boundary_definition are mandatory and must be specific to this image.
+        - excluded_regions must list visually plausible confounders that were deliberately excluded; use [] only when no confounder is visible.
         {_segmentation_boundary_rules()}
         - Do not point to labels, ruler marks, measurement text, caliper text, or empty background.
         - Do not output mask rows or a point-only answer.
-        {build_harness_constraints(step, None)}
         """
     ).strip()
 
@@ -1182,6 +1249,7 @@ def _bbox_global_prompt(
 
         Task contract:
         - target_label: {contract['target_label']}
+        - step_finding: {step.get('finding') or ''}
         - step_action: {step.get('action') or ''}
         - task_kind: qualitative_evidence_check
         - target_scope: {contract['target_scope']}
@@ -1200,6 +1268,7 @@ def _bbox_global_prompt(
         - This is not a segmentation task.
         - Draw one tight bounding box around the single most relevant visual evidence region for this qualitative finding.
         - If the step checks an attribute of a parent target, box the visible subregion or whole parent area that supports the conclusion.
+        - Localize the concrete visual evidence for step_finding, not the whole image and not an abstract diagnosis label.
         - Do not output boundary_points, polygons, masks, point markers, or multiple boxes.
 
         Return ONLY JSON:
@@ -1505,6 +1574,9 @@ def run_vlm_grounding_harness(
         "conclusion": candidate["conclusion"],
         "confidence": candidate["confidence"],
         "rationale": candidate["rationale"],
+        "target_understanding": candidate.get("target_understanding", ""),
+        "boundary_definition": candidate.get("boundary_definition", ""),
+        "excluded_regions": candidate.get("excluded_regions", []),
         "grounding": grounding,
         "validation": validation,
         "harness": {
@@ -1516,6 +1588,9 @@ def run_vlm_grounding_harness(
             "analysis_scale": context.analysis_scale,
             "view_media_type": context.media_type,
             "target_label": target_label,
+            "target_understanding": candidate.get("target_understanding", ""),
+            "boundary_definition": candidate.get("boundary_definition", ""),
+            "excluded_regions": candidate.get("excluded_regions", []),
             "selected_view": candidate["selected_view"],
             "selected_view_label": candidate["selected_view_label"],
             "selected_view_bounds": candidate["selected_view_bounds"],

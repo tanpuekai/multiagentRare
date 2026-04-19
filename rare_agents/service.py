@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import queue
 from base64 import b64encode
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+import re
 import threading
+import time
 from typing import Any
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -32,9 +35,12 @@ from rare_agents.models import (
     AgentRoleConfig,
     AppProfile,
     CaseSessionRecord,
+    CaseFeedback,
     CaseSubmission,
     DepartmentOption,
+    DoctorApproval,
     EngineResult,
+    EvidenceFeedback,
     OrchestrationMode,
     QueryHistoryItem,
     SessionTurn,
@@ -44,6 +50,8 @@ from rare_agents.models import (
 )
 from rare_agents.executor import is_executor_invocation, run_executor_case, strip_executor_mention
 from rare_agents.planner import is_planner_invocation, run_planner_case, strip_planner_mention
+from rare_agents.decider import is_decider_invocation, run_decider_case, strip_decider_mention
+from rare_agents.report_generator import is_report_invocation, run_report_case, strip_report_mention
 from rare_agents.storage import load_json, save_json
 
 
@@ -75,6 +83,12 @@ VISION_TEST_IMAGE_DATA_URL = _build_vision_test_image_data_url()
 
 EXECUTOR_JOBS: dict[str, dict[str, Any]] = {}
 EXECUTOR_JOBS_LOCK = threading.Lock()
+AUTO_JOBS: dict[str, dict[str, Any]] = {}
+AUTO_JOBS_LOCK = threading.Lock()
+AUTO_JOB_SUBSCRIBERS: dict[str, list[queue.Queue[dict[str, Any]]]] = {}
+AUTO_JOB_SUBSCRIBERS_LOCK = threading.Lock()
+
+AUTO_TRIGGER_PATTERN = re.compile(r"@auto\b", re.IGNORECASE)
 
 SETTINGS_SECTIONS = ["医生档案", "系统设置", "历史记录", "账户管理"]
 DEPARTMENTS = [item.value for item in DepartmentOption]
@@ -141,6 +155,8 @@ ROLE_LABELS = {
     "Orchestrator": "编排协调",
     "Planner": "规划分析",
     "Executor": "证据执行",
+    "Decider": "证据决策",
+    "Report Generator": "报告生成",
     "Generator": "生成起草",
     "Fact Checker": "事实核查",
     "Guideline Retriever": "指南检索",
@@ -205,6 +221,32 @@ def migrate_roles(roles: list[AgentRoleConfig]) -> list[AgentRoleConfig]:
                 role_spec="负责执行多模态诊断步骤，产出具备定位与量化依据的结构化证据。",
                 provider_id=planner_role.provider_id if planner_role else "",
                 provider_name=planner_role.provider_name if planner_role else "DeepSeek",
+                agent_count=1,
+            )
+        )
+    if not any(role.role_name == "Decider" for role in migrated):
+        executor_role = next((role for role in migrated if role.role_name == "Executor"), None)
+        planner_role = next((role for role in migrated if role.role_name == "Planner"), None)
+        source_role = executor_role or planner_role
+        migrated.append(
+            AgentRoleConfig(
+                role_name="Decider",
+                role_spec="收集 Executor 证据，融合支持与反证，形成 evidence-based 诊断判断。",
+                provider_id=source_role.provider_id if source_role else "",
+                provider_name=source_role.provider_name if source_role else "DeepSeek",
+                agent_count=1,
+            )
+        )
+    if not any(role.role_name == "Report Generator" for role in migrated):
+        decider_role = next((role for role in migrated if role.role_name == "Decider"), None)
+        generator_role = next((role for role in migrated if role.role_name == "Generator"), None)
+        source_role = decider_role or generator_role
+        migrated.append(
+            AgentRoleConfig(
+                role_name="Report Generator",
+                role_spec="基于 Decider 判断和 Executor 证据生成带证据引用的临床报告。",
+                provider_id=source_role.provider_id if source_role else "",
+                provider_name=source_role.provider_name if source_role else "DeepSeek",
                 agent_count=1,
             )
         )
@@ -357,10 +399,44 @@ def _load_turn(data: dict[str, Any] | None) -> SessionTurn | None:
     if submission is None or result is None:
         return None
     return SessionTurn(
+        turn_id=str(data.get("turn_id", "")).strip() or uuid4().hex[:12],
         timestamp=str(data.get("timestamp", "")),
         user_input=str(data.get("user_input", "")),
         submission=submission,
         result=result,
+    )
+
+
+def _load_approval(data: dict[str, Any] | None) -> DoctorApproval | None:
+    if not data:
+        return None
+    return DoctorApproval(
+        approval_id=str(data.get("approval_id", "")).strip() or uuid4().hex[:12],
+        turn_id=str(data.get("turn_id", "")).strip(),
+        execution_mode=str(data.get("execution_mode", "")).strip(),
+        action=str(data.get("action", "")).strip(),
+        note=str(data.get("note", "")).strip(),
+        created_at=str(data.get("created_at", "")).strip(),
+    )
+
+
+def _load_feedback(data: dict[str, Any] | None) -> CaseFeedback | None:
+    if not data:
+        return None
+    evidence_ratings = [
+        EvidenceFeedback(
+            evidence_id=str(item.get("evidence_id", "")).strip(),
+            rating=int(item.get("rating", 0)),
+        )
+        for item in data.get("evidence_ratings", [])
+        if isinstance(item, dict)
+    ]
+    return CaseFeedback(
+        submitted_at=str(data.get("submitted_at", "")).strip(),
+        diagnosis_rating=int(data.get("diagnosis_rating", 0)),
+        report_rating=int(data.get("report_rating", 0)),
+        evidence_ratings=evidence_ratings,
+        comment=str(data.get("comment", "")).strip(),
     )
 
 
@@ -426,8 +502,13 @@ def _merge_case_summary(base_summary: str, next_summary: str) -> str:
 def _merged_submission_context(base: CaseSubmission | None, current: CaseSubmission) -> CaseSubmission:
     if base is None:
         return current
-    merged_assets = _merge_image_assets(base.image_assets, current.image_assets)
-    merged_images = _merge_named_lists(base.uploaded_images, current.uploaded_images or [item["name"] for item in merged_assets])
+    has_new_images = bool(current.image_assets or current.uploaded_images)
+    if has_new_images:
+        merged_assets = list(current.image_assets)
+        merged_images = list(current.uploaded_images or [str(item.get("name", "")).strip() for item in current.image_assets if str(item.get("name", "")).strip()])
+    else:
+        merged_assets = list(base.image_assets)
+        merged_images = list(base.uploaded_images)
     merged_docs = _merge_named_lists(base.uploaded_docs, current.uploaded_docs)
     return CaseSubmission(
         department=current.department or base.department,
@@ -459,6 +540,109 @@ def _analysis_payloads_from_submission(submission: CaseSubmission) -> list[dict[
     ]
 
 
+def _context_submission_from_session(session: CaseSessionRecord | None) -> CaseSubmission | None:
+    if session is None:
+        return None
+    if session.context_submission is not None:
+        return session.context_submission
+    if session.submission is not None:
+        return session.submission
+    turns = session.turns or []
+    for turn in reversed(turns):
+        if turn.submission is not None:
+            return turn.submission
+    return None
+
+
+def _normalize_context_text(value: object) -> str:
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+def _normalize_name_set(values: list[str] | None) -> set[str]:
+    return {_normalize_context_text(value) for value in values or [] if _normalize_context_text(value)}
+
+
+def _session_has_bundle(session: CaseSessionRecord | None, bundle: str) -> bool:
+    if session is None or not bundle:
+        return session is not None
+    if bundle == "planner":
+        return _latest_planner_bundle(session) is not None
+    if bundle == "executor":
+        return _latest_executor_bundle(session) is not None
+    if bundle == "decider":
+        return _latest_decider_bundle(session) is not None
+    return False
+
+
+def _session_context_score(session: CaseSessionRecord, reference: CaseSubmission | None) -> int:
+    if reference is None:
+        return 0
+    candidate = _context_submission_from_session(session)
+    if candidate is None:
+        return -1
+    score = 0
+    candidate_summary = _normalize_context_text(candidate.case_summary)
+    reference_summary = _normalize_context_text(reference.case_summary)
+    if candidate_summary and reference_summary:
+        if candidate_summary == reference_summary:
+            score += 12
+        elif candidate_summary in reference_summary or reference_summary in candidate_summary:
+            score += 6
+    candidate_cc = _normalize_context_text(candidate.chief_complaint)
+    reference_cc = _normalize_context_text(reference.chief_complaint)
+    if candidate_cc and reference_cc and candidate_cc == reference_cc:
+        score += 4
+    candidate_images = _normalize_name_set(candidate.uploaded_images)
+    reference_images = _normalize_name_set(reference.uploaded_images)
+    if candidate_images and reference_images:
+        score += 3 * len(candidate_images & reference_images)
+    candidate_docs = _normalize_name_set(candidate.uploaded_docs)
+    reference_docs = _normalize_name_set(reference.uploaded_docs)
+    if candidate_docs and reference_docs:
+        score += 2 * len(candidate_docs & reference_docs)
+    if _normalize_context_text(candidate.department) and _normalize_context_text(candidate.department) == _normalize_context_text(reference.department):
+        score += 1
+    if _normalize_context_text(candidate.output_style) and _normalize_context_text(candidate.output_style) == _normalize_context_text(reference.output_style):
+        score += 1
+    if _normalize_context_text(candidate.urgency) and _normalize_context_text(candidate.urgency) == _normalize_context_text(reference.urgency):
+        score += 1
+    return score
+
+
+def _resolve_context_session(
+    sessions: list[CaseSessionRecord],
+    *,
+    context_session_id: str = "",
+    required_bundle: str = "",
+    reference_submission: CaseSubmission | None = None,
+) -> CaseSessionRecord | None:
+    exact = next((session for session in sessions if session.session_id == context_session_id), None) if context_session_id else None
+    if exact is not None and _session_has_bundle(exact, required_bundle):
+        return exact
+
+    target_submission = reference_submission or _context_submission_from_session(exact)
+    best_session: CaseSessionRecord | None = None
+    best_score = -1
+    for session in sessions:
+        if exact is not None and session.session_id == exact.session_id:
+            continue
+        if not _session_has_bundle(session, required_bundle):
+            continue
+        score = _session_context_score(session, target_submission)
+        if score > best_score:
+            best_score = score
+            best_session = session
+    if best_session is not None and best_score > 0:
+        return best_session
+    if exact is not None:
+        return exact
+    if required_bundle:
+        for session in sessions:
+            if _session_has_bundle(session, required_bundle):
+                return session
+    return sessions[0] if sessions else None
+
+
 def _latest_planner_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
     if session is None:
         return None
@@ -480,6 +664,51 @@ def _latest_planner_bundle(session: CaseSessionRecord | None) -> dict[str, Any] 
     return None
 
 
+def _latest_executor_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
+    if session is None:
+        return None
+    turns = session.turns or []
+    for turn in reversed(turns):
+        if turn.result.execution_mode != "executor":
+            continue
+        if not turn.result.execution_records:
+            continue
+        trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
+        return {
+            "records": turn.result.execution_records,
+            "plan_steps": turn.result.plan_steps,
+            "plan_display_steps": turn.result.plan_display_steps,
+            "references": turn.result.references,
+            "provider": turn.result.serving_provider,
+            "model": turn.result.serving_model,
+            "note": str(trace.get("note") or "Loaded the existing executor evidence from context."),
+        }
+    return None
+
+
+def _latest_decider_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
+    if session is None:
+        return None
+    turns = session.turns or []
+    for turn in reversed(turns):
+        if turn.result.execution_mode != "decider":
+            continue
+        try:
+            decision = json.loads(turn.result.raw_provider_payload or "{}")
+        except json.JSONDecodeError:
+            decision = {}
+        if not decision:
+            continue
+        trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
+        return {
+            "decision": decision,
+            "provider": turn.result.serving_provider,
+            "model": turn.result.serving_model,
+            "note": str(trace.get("note") or "Loaded the existing decider decision from context."),
+        }
+    return None
+
+
 def load_sessions(username: str) -> list[CaseSessionRecord]:
     ensure_storage(username)
     raw = load_json(_user_paths(username)["sessions"], [])
@@ -493,12 +722,14 @@ def load_sessions(username: str) -> list[CaseSessionRecord]:
             if not materialized_turns and submission is not None and result is not None:
                 materialized_turns = [
                     SessionTurn(
+                        turn_id=uuid4().hex[:12],
                         timestamp=str(item.get("timestamp", "")),
                         user_input=submission.case_summary,
                         submission=submission,
                         result=result,
                     )
                 ]
+            approvals = [_load_approval(approval) for approval in item.get("doctor_approvals", [])]
             sessions.append(
                 CaseSessionRecord(
                     session_id=item["session_id"],
@@ -513,6 +744,8 @@ def load_sessions(username: str) -> list[CaseSessionRecord]:
                     result=result,
                     context_submission=_load_submission(item.get("context_submission")) or submission,
                     turns=materialized_turns,
+                    doctor_approvals=[approval for approval in approvals if approval is not None],
+                    case_feedback=_load_feedback(item.get("case_feedback")),
                 )
             )
         return sessions
@@ -960,16 +1193,41 @@ def _timestamp_now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def is_auto_invocation(text: str) -> bool:
+    return bool(AUTO_TRIGGER_PATTERN.search(str(text or "")))
+
+
+def strip_auto_mention(text: str) -> str:
+    cleaned = AUTO_TRIGGER_PATTERN.sub("", str(text or ""))
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _prepare_case_request(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings(username)
     profile = load_profile(username)
     sessions = load_sessions(username)
     raw_text = str(payload.get("case_summary", "")).strip()
     context_session_id = str(payload.get("context_session_id", "")).strip()
-    active_session = next((session for session in sessions if session.session_id == context_session_id), None) if context_session_id else None
+    report_requested = is_report_invocation(raw_text)
+    decider_requested = is_decider_invocation(raw_text)
     executor_requested = is_executor_invocation(raw_text)
     planner_requested = is_planner_invocation(raw_text)
-    if executor_requested:
+    auto_requested = is_auto_invocation(raw_text)
+    context_bundle = "executor" if decider_requested or report_requested else "planner" if executor_requested else ""
+    active_session = _resolve_context_session(
+        sessions,
+        context_session_id=context_session_id,
+        required_bundle=context_bundle,
+    )
+    if auto_requested:
+        main_text = strip_auto_mention(raw_text)
+    elif report_requested:
+        main_text = strip_report_mention(raw_text)
+    elif decider_requested:
+        main_text = strip_decider_mention(raw_text)
+    elif executor_requested:
         main_text = strip_executor_mention(raw_text)
     elif planner_requested:
         main_text = strip_planner_mention(raw_text)
@@ -981,10 +1239,11 @@ def _prepare_case_request(username: str, payload: dict[str, Any]) -> dict[str, A
         else payload.get("uploaded_image_payloads")
     )
     if not main_text:
-        if active_session and active_session.context_submission:
-            main_text = active_session.context_submission.case_summary
+        context_submission = _context_submission_from_session(active_session)
+        if context_submission is not None:
+            main_text = context_submission.case_summary
         else:
-            raise ValueError("请先输入病例摘要，或在已有上下文中继续执行。")
+            raise ValueError("\u8bf7\u5148\u8f93\u5165\u75c5\u4f8b\u6458\u8981\uff0c\u6216\u5728\u5df2\u6709\u4e0a\u4e0b\u6587\u4e2d\u7ee7\u7eed\u6267\u884c\u3002")
 
     prefill = parse_ehr_intake(main_text, settings.default_department)
     incoming_submission = CaseSubmission(
@@ -1002,25 +1261,87 @@ def _prepare_case_request(username: str, payload: dict[str, Any]) -> dict[str, A
         image_assets=image_assets,
         single_model_test=bool(payload.get("single_model_test", False)),
     )
+    active_session = _resolve_context_session(
+        sessions,
+        context_session_id=context_session_id,
+        required_bundle=context_bundle,
+        reference_submission=incoming_submission,
+    )
     submission = _merged_submission_context(
-        active_session.context_submission if active_session and active_session.context_submission else None,
+        _context_submission_from_session(active_session),
         incoming_submission,
     )
     planner_image_payloads = _analysis_payloads_from_submission(submission)
-    plan_bundle = _latest_planner_bundle(active_session) if executor_requested else None
+    plan_session = active_session
+    execution_session = active_session
+    decision_session = active_session
+    plan_bundle = None
+    execution_bundle = None
+    decision_bundle = None
+
+    if executor_requested:
+        plan_session = _resolve_context_session(
+            sessions,
+            context_session_id=context_session_id,
+            required_bundle="planner",
+            reference_submission=submission,
+        )
+        if plan_session is not None and plan_session is not active_session:
+            submission = _merged_submission_context(_context_submission_from_session(plan_session), incoming_submission)
+            planner_image_payloads = _analysis_payloads_from_submission(submission)
+        plan_bundle = _latest_planner_bundle(plan_session)
+
+    if decider_requested or report_requested:
+        execution_session = _resolve_context_session(
+            sessions,
+            context_session_id=context_session_id,
+            required_bundle="executor",
+            reference_submission=submission,
+        )
+        if execution_session is not None and execution_session is not plan_session and execution_session is not active_session:
+            submission = _merged_submission_context(_context_submission_from_session(execution_session), incoming_submission)
+            planner_image_payloads = _analysis_payloads_from_submission(submission)
+        execution_bundle = _latest_executor_bundle(execution_session)
+
+    if report_requested:
+        decision_session = _resolve_context_session(
+            sessions,
+            context_session_id=context_session_id,
+            required_bundle="decider",
+            reference_submission=submission,
+        )
+        if decision_session is not None and decision_session is not execution_session and decision_session is not active_session:
+            submission = _merged_submission_context(_context_submission_from_session(decision_session), incoming_submission)
+            planner_image_payloads = _analysis_payloads_from_submission(submission)
+            if execution_bundle is None:
+                execution_bundle = _latest_executor_bundle(decision_session)
+        decision_bundle = _latest_decider_bundle(decision_session)
+
+    resolved_session = decision_session or execution_session or plan_session or active_session
     if executor_requested and plan_bundle is None:
-        raise ValueError("当前上下文中没有可执行的诊断计划。请先调用 @Planner 生成 plan。")
+        raise ValueError("\u5f53\u524d\u4e0a\u4e0b\u6587\u4e2d\u6ca1\u6709\u53ef\u6267\u884c\u7684\u8bca\u65ad\u8ba1\u5212\u3002\u8bf7\u5148\u8c03\u7528 @Planner \u751f\u6210 plan\u3002")
+    if decider_requested and execution_bundle is None:
+        raise ValueError("\u5f53\u524d\u4e0a\u4e0b\u6587\u4e2d\u6ca1\u6709\u5df2\u5b8c\u6210\u7684 Executor \u8bc1\u636e\u3002\u8bf7\u5148\u8c03\u7528 @Executor \u6267\u884c\u8ba1\u5212\u3002")
+    if report_requested and execution_bundle is None:
+        raise ValueError("\u5f53\u524d\u4e0a\u4e0b\u6587\u4e2d\u6ca1\u6709\u5df2\u5b8c\u6210\u7684 Executor \u8bc1\u636e\u3002\u8bf7\u5148\u8c03\u7528 @Executor \u6267\u884c\u8ba1\u5212\u3002")
+    if report_requested and decision_bundle is None:
+        raise ValueError("\u5f53\u524d\u4e0a\u4e0b\u6587\u4e2d\u6ca1\u6709 Decider \u8bca\u65ad\u5224\u65ad\u3002\u8bf7\u5148\u8c03\u7528 @Decider \u5b8c\u6210\u8bc1\u636e\u878d\u5408\u3002")
     return {
         "settings": settings,
         "profile": profile,
         "prefill": prefill,
         "raw_text": raw_text,
-        "active_session_id": active_session.session_id if active_session else "",
+        "active_session_id": resolved_session.session_id if resolved_session else "",
         "submission": submission,
         "planner_image_payloads": planner_image_payloads,
+        "report_requested": report_requested,
+        "decider_requested": decider_requested,
         "executor_requested": executor_requested,
         "planner_requested": planner_requested,
+        "auto_requested": auto_requested,
         "plan_bundle": plan_bundle,
+        "execution_bundle": execution_bundle,
+        "decision_bundle": decision_bundle,
     }
 
 
@@ -1047,6 +1368,7 @@ def _persist_case_result(
         active_session.context_submission = submission
         active_session.turns.append(
             SessionTurn(
+                turn_id=uuid4().hex[:12],
                 timestamp=turn_timestamp,
                 user_input=raw_text or submission.case_summary,
                 submission=submission,
@@ -1061,6 +1383,7 @@ def _persist_case_result(
             submission,
             result,
             user_input=raw_text or submission.case_summary,
+            turn_id=uuid4().hex[:12],
         )
         sessions = [session] + sessions
 
@@ -1213,10 +1536,498 @@ def get_executor_job(username: str, job_id: str) -> dict[str, Any] | None:
         return _serialize_executor_job(job)
 
 
+def _planner_bundle_from_result(result: EngineResult) -> dict[str, Any]:
+    trace = result.agent_trace[0] if result.agent_trace else {}
+    return {
+        "steps": list(result.plan_steps or []),
+        "display_steps": list(result.plan_display_steps or []),
+        "references": list(result.references or []),
+        "provider": result.serving_provider,
+        "model": result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing planner-generated execution plan from context."),
+    }
+
+
+def _executor_bundle_from_result(result: EngineResult) -> dict[str, Any]:
+    trace = result.agent_trace[-1] if result.agent_trace else {}
+    return {
+        "records": list(result.execution_records or []),
+        "plan_steps": list(result.plan_steps or []),
+        "plan_display_steps": list(result.plan_display_steps or []),
+        "references": list(result.references or []),
+        "provider": result.serving_provider,
+        "model": result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing executor evidence from context."),
+    }
+
+
+def _decider_bundle_from_result(result: EngineResult) -> dict[str, Any]:
+    try:
+        decision = json.loads(result.raw_provider_payload or "{}")
+    except json.JSONDecodeError:
+        decision = {}
+    trace = result.agent_trace[-1] if result.agent_trace else {}
+    return {
+        "decision": decision,
+        "provider": result.serving_provider,
+        "model": result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing decider decision from context."),
+    }
+
+
+def _execution_evidence_ids(execution_bundle: dict[str, Any]) -> list[str]:
+    evidence_ids: list[str] = []
+    for record in execution_bundle.get("records") or []:
+        if not isinstance(record, dict):
+            continue
+        step_id = int(record.get("step_id") or 0)
+        if step_id > 0:
+            evidence_ids.append(f"E{step_id}")
+    return sorted(set(evidence_ids), key=lambda value: int(value[1:]) if value[1:].isdigit() else 0)
+
+
+def _serialize_auto_job(job: dict[str, Any], *, include_details: bool = True) -> dict[str, Any]:
+    payload = {
+        "job_id": str(job.get("job_id", "")),
+        "status": str(job.get("status", "")),
+        "stage": str(job.get("stage", "")),
+        "active_mode": str(job.get("active_mode", "")),
+        "created_at": str(job.get("created_at", "")),
+        "updated_at": str(job.get("updated_at", "")),
+        "active_step_id": job.get("active_step_id"),
+        "failed_stage": str(job.get("failed_stage", "")),
+        "failed_step_id": job.get("failed_step_id"),
+        "step_count": int(job.get("step_count", 0)),
+        "completed_step_ids": [int(item) for item in job.get("completed_step_ids", [])],
+        "completed_modes": [str(item) for item in job.get("completed_modes", []) if str(item)],
+        "stream_stage": str(job.get("stream_stage", "")),
+        "stream_label": str(job.get("stream_label", "")),
+        "stream_preview": str(job.get("stream_preview", "")),
+        "stream_event_count": int(job.get("stream_event_count", 0)),
+        "error_message": str(job.get("error_message", "")),
+    }
+    if include_details:
+        payload.update(
+            {
+                "plan_display_steps": deepcopy(job.get("plan_display_steps", [])),
+                "execution_records": deepcopy(job.get("execution_records", [])),
+                "session": deepcopy(job.get("session")),
+                "sessions": deepcopy(job.get("sessions", [])),
+            }
+        )
+    return payload
+
+
+def _update_auto_job(job_id: str, **changes: Any) -> dict[str, Any] | None:
+    with AUTO_JOBS_LOCK:
+        job = AUTO_JOBS.get(job_id)
+        if job is None:
+            return None
+        for key, value in changes.items():
+            job[key] = deepcopy(value)
+        job["updated_at"] = _timestamp_now()
+        updated = deepcopy(job)
+    _broadcast_auto_job(_serialize_auto_job(updated, include_details=False))
+    return updated
+
+
+def _broadcast_auto_job(job_snapshot: dict[str, Any]) -> None:
+    job_id = str(job_snapshot.get("job_id") or "")
+    if not job_id:
+        return
+    with AUTO_JOB_SUBSCRIBERS_LOCK:
+        listeners = list(AUTO_JOB_SUBSCRIBERS.get(job_id, []))
+    for listener in listeners:
+        listener.put(deepcopy(job_snapshot))
+
+
+def _auto_executor_progress_callback(job_id: str):
+    def callback(event: dict[str, Any]) -> None:
+        records = [dict(item) for item in event.get("records", []) if isinstance(item, dict)]
+        _update_auto_job(
+            job_id,
+            status="running",
+            stage="executor",
+            active_mode="executor",
+            active_step_id=event.get("active_step_id"),
+            failed_step_id=event.get("failed_step_id"),
+            step_count=max(int(len(list(event.get("plan_display_steps") or []))), int(len(list(event.get("records") or [])))),
+            completed_step_ids=[int(item.get("step_id") or 0) for item in records if int(item.get("step_id") or 0)],
+            plan_display_steps=list(event.get("plan_display_steps") or []),
+            execution_records=records,
+        )
+
+    return callback
+
+
+def _append_auto_model_stream(job_id: str, *, stage: str, label: str, delta: str) -> None:
+    if not delta:
+        return
+    with AUTO_JOBS_LOCK:
+        job = AUTO_JOBS.get(job_id)
+        if job is None:
+            return
+        preview = f"{job.get('stream_preview') or ''}{delta}"
+        job["stream_stage"] = stage
+        job["stream_label"] = label
+        job["stream_preview"] = preview[-1200:]
+        job["stream_event_count"] = int(job.get("stream_event_count") or 0) + 1
+        job["updated_at"] = _timestamp_now()
+        snapshot = _serialize_auto_job(job, include_details=False)
+    _broadcast_auto_job(snapshot)
+
+
+def _auto_model_stream_callback(job_id: str, *, stage: str, label: str):
+    buffer: list[str] = []
+    last_emit_at = 0.0
+    min_chars = 120
+    min_interval_s = 0.5
+
+    def flush() -> None:
+        nonlocal last_emit_at
+        if not buffer:
+            return
+        text = "".join(buffer)
+        buffer.clear()
+        last_emit_at = time.monotonic()
+        _append_auto_model_stream(job_id, stage=stage, label=label, delta=text)
+
+    def callback(event: dict[str, Any]) -> None:
+        delta = str(event.get("delta") or "")
+        if delta:
+            buffer.append(delta)
+        now = time.monotonic()
+        if event.get("done") or len("".join(buffer)) >= min_chars or now - last_emit_at >= min_interval_s:
+            flush()
+
+    return callback
+
+
+def _run_auto_job(job_id: str, username: str, prepared: dict[str, Any]) -> None:
+    active_session_id = str(prepared.get("active_session_id") or "")
+    completed_modes: list[str] = []
+    current_mode = ""
+    submission = prepared["submission"]
+    profile = prepared["profile"]
+    settings = prepared["settings"]
+    planner_image_payloads = prepared["planner_image_payloads"]
+    raw_text = prepared["raw_text"] or "@Auto"
+    try:
+        current_mode = "planner"
+        _update_auto_job(job_id, status="running", stage="planner", active_mode="planner")
+        planner_result = run_planner_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            image_payloads=planner_image_payloads,
+            stream_callback=_auto_model_stream_callback(job_id, stage="planner", label="@Planner"),
+        )
+        planner_response = _persist_case_result(
+            username,
+            submission=submission,
+            result=planner_result,
+            raw_text=raw_text,
+            active_session_id=active_session_id,
+        )
+        active_session_id = str(planner_response["session"]["session_id"])
+        completed_modes.append("planner")
+        plan_bundle = _planner_bundle_from_result(planner_result)
+        _update_auto_job(
+            job_id,
+            stage="planner",
+            active_mode="planner",
+            completed_modes=completed_modes,
+            plan_display_steps=list(planner_result.plan_display_steps or []),
+            step_count=len(list(planner_result.plan_display_steps or [])),
+            session=planner_response["session"],
+            sessions=planner_response["sessions"],
+        )
+
+        current_mode = "executor"
+        _update_auto_job(job_id, status="running", stage="executor", active_mode="executor")
+        executor_result = run_executor_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            image_payloads=planner_image_payloads,
+            plan_bundle=plan_bundle,
+            progress_callback=_auto_executor_progress_callback(job_id),
+            stream_callback=_auto_model_stream_callback(job_id, stage="executor", label="@Executor"),
+        )
+        executor_response = _persist_case_result(
+            username,
+            submission=submission,
+            result=executor_result,
+            raw_text="@Auto / @Executor",
+            active_session_id=active_session_id,
+        )
+        active_session_id = str(executor_response["session"]["session_id"])
+        completed_modes.append("executor")
+        execution_bundle = _executor_bundle_from_result(executor_result)
+        _update_auto_job(
+            job_id,
+            stage="executor",
+            active_mode="executor",
+            completed_modes=completed_modes,
+            step_count=len(list(executor_result.plan_display_steps or [])),
+            completed_step_ids=[int(item.get("step_id") or 0) for item in executor_result.execution_records if int(item.get("step_id") or 0)],
+            execution_records=list(executor_result.execution_records or []),
+            plan_display_steps=list(executor_result.plan_display_steps or []),
+            session=executor_response["session"],
+            sessions=executor_response["sessions"],
+        )
+
+        current_mode = "decider"
+        _update_auto_job(job_id, status="running", stage="decider", active_mode="decider", active_step_id=None)
+        decider_result = run_decider_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            execution_bundle=execution_bundle,
+            stream_callback=_auto_model_stream_callback(job_id, stage="decider", label="@Decider"),
+        )
+        decider_response = _persist_case_result(
+            username,
+            submission=submission,
+            result=decider_result,
+            raw_text="@Auto / @Decider",
+            active_session_id=active_session_id,
+        )
+        active_session_id = str(decider_response["session"]["session_id"])
+        completed_modes.append("decider")
+        decision_bundle = _decider_bundle_from_result(decider_result)
+        _update_auto_job(
+            job_id,
+            stage="decider",
+            active_mode="decider",
+            completed_modes=completed_modes,
+            session=decider_response["session"],
+            sessions=decider_response["sessions"],
+        )
+
+        current_mode = "report"
+        _update_auto_job(job_id, status="running", stage="report", active_mode="report", active_step_id=None)
+        report_result = run_report_case(
+            submission=submission,
+            profile=profile,
+            settings=settings,
+            execution_bundle=execution_bundle,
+            decision_bundle=decision_bundle,
+            stream_callback=_auto_model_stream_callback(job_id, stage="report", label="@Report"),
+        )
+        report_response = _persist_case_result(
+            username,
+            submission=submission,
+            result=report_result,
+            raw_text="@Auto / @Report",
+            active_session_id=active_session_id,
+        )
+        completed_modes.append("report")
+        _update_auto_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            active_mode="",
+            active_step_id=None,
+            failed_stage="",
+            failed_step_id=None,
+            completed_modes=completed_modes,
+            session=report_response["session"],
+            sessions=report_response["sessions"],
+            error_message="",
+        )
+    except Exception as exc:
+        _update_auto_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            active_step_id=None,
+            failed_stage=current_mode,
+            error_message=str(exc),
+        )
+
+
+def create_auto_job(username: str, payload: dict[str, Any]) -> dict[str, Any]:
+    prepared = _prepare_case_request(username, payload)
+    if not prepared["auto_requested"]:
+        raise ValueError("Auto job endpoint requires an @Auto request.")
+    created_at = _timestamp_now()
+    job_id = uuid4().hex[:12]
+    initial_job = {
+        "job_id": job_id,
+        "username": username,
+        "status": "queued",
+        "stage": "queued",
+        "active_mode": "",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "active_step_id": None,
+        "failed_stage": "",
+        "failed_step_id": None,
+        "step_count": 0,
+        "completed_step_ids": [],
+        "completed_modes": [],
+        "plan_display_steps": [],
+        "execution_records": [],
+        "stream_stage": "",
+        "stream_label": "",
+        "stream_preview": "",
+        "stream_event_count": 0,
+        "error_message": "",
+        "session": None,
+        "sessions": [],
+    }
+    with AUTO_JOBS_LOCK:
+        AUTO_JOBS[job_id] = initial_job
+    worker = threading.Thread(
+        target=_run_auto_job,
+        args=(job_id, username, prepared),
+        daemon=True,
+        name=f"auto-job-{job_id}",
+    )
+    worker.start()
+    return _serialize_auto_job(initial_job)
+
+
+def get_auto_job(username: str, job_id: str, *, include_details: bool = True) -> dict[str, Any] | None:
+    with AUTO_JOBS_LOCK:
+        job = AUTO_JOBS.get(job_id)
+        if job is None or str(job.get("username")) != username:
+            return None
+        return _serialize_auto_job(job, include_details=include_details)
+
+
+def subscribe_auto_job(username: str, job_id: str) -> tuple[dict[str, Any] | None, queue.Queue[dict[str, Any]] | None]:
+    listener: queue.Queue[dict[str, Any]] = queue.Queue()
+    with AUTO_JOBS_LOCK:
+        job = AUTO_JOBS.get(job_id)
+        if job is None or str(job.get("username")) != username:
+            return None, None
+        snapshot = _serialize_auto_job(job, include_details=False)
+    with AUTO_JOB_SUBSCRIBERS_LOCK:
+        AUTO_JOB_SUBSCRIBERS.setdefault(job_id, []).append(listener)
+    with AUTO_JOBS_LOCK:
+        latest = AUTO_JOBS.get(job_id)
+        if latest is not None and str(latest.get("username")) == username:
+            latest_snapshot = _serialize_auto_job(latest, include_details=False)
+            if latest_snapshot.get("updated_at") != snapshot.get("updated_at"):
+                listener.put(deepcopy(latest_snapshot))
+            if latest_snapshot.get("status") in {"completed", "failed"}:
+                snapshot = latest_snapshot
+    return snapshot, listener
+
+
+def unsubscribe_auto_job(job_id: str, listener: queue.Queue[dict[str, Any]]) -> None:
+    with AUTO_JOB_SUBSCRIBERS_LOCK:
+        listeners = AUTO_JOB_SUBSCRIBERS.get(job_id)
+        if not listeners:
+            return
+        AUTO_JOB_SUBSCRIBERS[job_id] = [item for item in listeners if item is not listener]
+        if not AUTO_JOB_SUBSCRIBERS[job_id]:
+            AUTO_JOB_SUBSCRIBERS.pop(job_id, None)
+
+
+def _find_session_and_turn(
+    username: str,
+    *,
+    session_id: str,
+    turn_id: str = "",
+) -> tuple[list[CaseSessionRecord], CaseSessionRecord, SessionTurn | None]:
+    sessions = load_sessions(username)
+    session = next((item for item in sessions if item.session_id == session_id), None)
+    if session is None:
+        raise ValueError("Session not found.")
+    turn = next((item for item in session.turns if item.turn_id == turn_id), None) if turn_id else None
+    return sessions, session, turn
+
+
+def submit_turn_approval(username: str, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    turn_id = str(payload.get("turn_id", "")).strip()
+    action = str(payload.get("action", "")).strip().lower()
+    note = str(payload.get("note", "")).strip()
+    if action not in {"approved", "revision_requested"}:
+        raise ValueError("Approval action must be approved or revision_requested.")
+    sessions, session, turn = _find_session_and_turn(username, session_id=session_id, turn_id=turn_id)
+    if turn is None:
+        raise ValueError("Turn not found.")
+    session.doctor_approvals.append(
+        DoctorApproval(
+            approval_id=uuid4().hex[:12],
+            turn_id=turn.turn_id,
+            execution_mode=turn.result.execution_mode,
+            action=action,
+            note=note,
+            created_at=_timestamp_now(),
+        )
+    )
+    save_sessions(username, sessions)
+    return {"session": serialize_session(session)}
+
+
+def submit_case_feedback(username: str, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    sessions, session, _ = _find_session_and_turn(username, session_id=session_id)
+    executor_bundle = _latest_executor_bundle(session)
+    if executor_bundle is None:
+        raise ValueError("Case feedback requires completed Executor evidence.")
+    if _latest_decider_bundle(session) is None:
+        raise ValueError("Case feedback requires a completed Decider decision.")
+    report_turn_exists = any(turn.result.execution_mode == "report" for turn in session.turns)
+    if not report_turn_exists:
+        raise ValueError("Case feedback requires a completed report.")
+    diagnosis_rating = int(payload.get("diagnosis_rating", 0))
+    report_rating = int(payload.get("report_rating", 0))
+    if diagnosis_rating < 1 or diagnosis_rating > 5:
+        raise ValueError("Diagnosis rating must be between 1 and 5.")
+    if report_rating < 1 or report_rating > 5:
+        raise ValueError("Report rating must be between 1 and 5.")
+    evidence_ids = _execution_evidence_ids(executor_bundle)
+    evidence_payload = payload.get("evidence_ratings")
+    if not isinstance(evidence_payload, list):
+        raise ValueError("Evidence ratings must be a list.")
+    ratings_by_id: dict[str, int] = {}
+    for item in evidence_payload:
+        if not isinstance(item, dict):
+            raise ValueError("Each evidence rating must be an object.")
+        evidence_id = str(item.get("evidence_id", "")).strip()
+        rating = int(item.get("rating", 0))
+        if evidence_id not in evidence_ids:
+            raise ValueError(f"Unknown evidence id in feedback: {evidence_id or 'empty'}.")
+        if rating < 1 or rating > 5:
+            raise ValueError(f"Evidence rating for {evidence_id} must be between 1 and 5.")
+        ratings_by_id[evidence_id] = rating
+    missing = [item for item in evidence_ids if item not in ratings_by_id]
+    if missing:
+        raise ValueError(f"Missing evidence ratings: {', '.join(missing)}")
+    session.case_feedback = CaseFeedback(
+        submitted_at=_timestamp_now(),
+        diagnosis_rating=diagnosis_rating,
+        report_rating=report_rating,
+        evidence_ratings=[EvidenceFeedback(evidence_id=item, rating=ratings_by_id[item]) for item in evidence_ids],
+        comment=str(payload.get("comment", "")).strip(),
+    )
+    save_sessions(username, sessions)
+    return {"session": serialize_session(session)}
+
+
 def submit_case(username: str, payload: dict[str, Any]) -> dict[str, Any]:
     prepared = _prepare_case_request(username, payload)
     submission = prepared["submission"]
-    if prepared["executor_requested"]:
+    if prepared["report_requested"]:
+        result = run_report_case(
+            submission=submission,
+            profile=prepared["profile"],
+            settings=prepared["settings"],
+            execution_bundle=prepared["execution_bundle"],
+            decision_bundle=prepared["decision_bundle"],
+        )
+    elif prepared["decider_requested"]:
+        result = run_decider_case(
+            submission=submission,
+            profile=prepared["profile"],
+            settings=prepared["settings"],
+            execution_bundle=prepared["execution_bundle"],
+        )
+    elif prepared["executor_requested"]:
         result = run_executor_case(
             submission=submission,
             profile=prepared["profile"],
@@ -1283,6 +2094,8 @@ def serialize_session(session: CaseSessionRecord, *, include_details: bool = Tru
         payload["result"] = asdict(session.result) if session.result else None
         payload["context_submission"] = asdict(session.context_submission) if session.context_submission else None
         payload["turns"] = [asdict(turn) for turn in session.turns]
+        payload["doctor_approvals"] = [asdict(item) for item in session.doctor_approvals]
+        payload["case_feedback"] = asdict(session.case_feedback) if session.case_feedback else None
     return payload
 
 

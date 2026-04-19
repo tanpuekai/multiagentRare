@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import queue
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from rare_agents.auth import authenticate_token, login_user, revoke_session_token
@@ -12,10 +15,12 @@ from rare_agents.intake_parser import parse_ehr_intake
 from rare_agents.service import (
     DEPARTMENTS,
     OUTPUT_STYLES,
+    create_auto_job,
     create_executor_job,
     create_managed_account,
     delete_managed_account,
     get_bootstrap_payload,
+    get_auto_job,
     get_executor_job,
     get_session,
     list_account_summaries,
@@ -26,7 +31,11 @@ from rare_agents.service import (
     serialize_session,
     settings_from_payload,
     submit_case,
+    submit_case_feedback,
+    submit_turn_approval,
+    subscribe_auto_job,
     test_provider_connection,
+    unsubscribe_auto_job,
     update_managed_account,
     update_session_sidebar_visibility,
 )
@@ -227,6 +236,88 @@ def executor_job_detail(job_id: str, request: Request) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Executor job not found.")
     return {"job": job}
+
+
+@app.post("/api/auto-jobs")
+async def create_auto_job_api(request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return {"job": create_auto_job(user["username"], payload)}
+    except ValueError as exc:
+        logger.exception("auto job create failed for user=%s detail=%s", user.get("username"), exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/auto-jobs/{job_id}")
+def auto_job_detail(job_id: str, request: Request) -> dict:
+    user = require_user(request)
+    job = get_auto_job(user["username"], job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auto job not found.")
+    return {"job": job}
+
+
+@app.get("/api/auto-jobs/{job_id}/stream")
+async def auto_job_stream(job_id: str, request: Request) -> StreamingResponse:
+    user = require_user(request)
+    snapshot, listener = subscribe_auto_job(user["username"], job_id)
+    if snapshot is None or listener is None:
+        raise HTTPException(status_code=404, detail="Auto job not found.")
+
+    async def events():
+        try:
+            yield f"data: {json.dumps({'job': snapshot}, ensure_ascii=False)}\n\n"
+            if snapshot.get("status") in {"completed", "failed"}:
+                return
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    update = await asyncio.to_thread(listener.get, True, 15)
+                except queue.Empty:
+                    latest = get_auto_job(user["username"], job_id, include_details=False)
+                    if latest is None:
+                        missing = {
+                            "job_id": job_id,
+                            "status": "failed",
+                            "stage": "failed",
+                            "error_message": "Auto job not found.",
+                        }
+                        yield f"data: {json.dumps({'job': missing}, ensure_ascii=False)}\n\n"
+                        return
+                    if latest.get("status") in {"completed", "failed"}:
+                        yield f"data: {json.dumps({'job': latest}, ensure_ascii=False)}\n\n"
+                        return
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"data: {json.dumps({'job': update}, ensure_ascii=False)}\n\n"
+                if update.get("status") in {"completed", "failed"}:
+                    return
+        finally:
+            unsubscribe_auto_job(job_id, listener)
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@app.post("/api/sessions/{session_id}/approvals")
+async def approve_session_turn(session_id: str, request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return submit_turn_approval(user["username"], session_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/sessions/{session_id}/feedback")
+async def submit_session_feedback(session_id: str, request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return submit_case_feedback(user["username"], session_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/{full_path:path}", response_class=HTMLResponse)
