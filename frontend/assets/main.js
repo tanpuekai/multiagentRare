@@ -152,6 +152,14 @@
 
   const AGENT_MENU_TREE = [
     {
+      id: "auto",
+      label: "@Auto",
+      hint: "从头到尾自动执行 planner 到 report",
+      searchText: "auto 自动 全流程 planner executor decider report",
+      tokenLabel: "@Auto",
+      value: "auto",
+    },
+    {
       id: "planner",
       label: "@Planner",
       hint: "根据输入生成执行计划",
@@ -167,6 +175,22 @@
       tokenLabel: "@Executor",
       value: "executor",
     },
+    {
+      id: "decider",
+      label: "@Decider",
+      hint: "融合执行证据并形成诊断判断",
+      searchText: "decider 诊断 判断 证据 融合",
+      tokenLabel: "@Decider",
+      value: "decider",
+    },
+    {
+      id: "report",
+      label: "@Report",
+      hint: "生成带证据引用的医疗报告",
+      searchText: "report report generator 报告 医疗报告 证据引用",
+      tokenLabel: "@Report",
+      value: "report",
+    },
   ];
 
   function commandTreeForTrigger(trigger) {
@@ -177,8 +201,20 @@
     return /@planner\b/i.test(String(text || ""));
   }
 
+  function isAutoInvocation(text) {
+    return /@auto\b/i.test(String(text || ""));
+  }
+
   function isExecutorInvocation(text) {
     return /@executor\b/i.test(String(text || ""));
+  }
+
+  function isDeciderInvocation(text) {
+    return /@decider\b/i.test(String(text || ""));
+  }
+
+  function isReportInvocation(text) {
+    return /@(?:report\s*generator|reportgenerator|report)\b/i.test(String(text || ""));
   }
 
   function normalizeSearchText(value) {
@@ -319,6 +355,7 @@
     if (session?.submission && session?.result) {
       return [
         {
+          turn_id: `fallback-${session.timestamp}-${session.result.execution_mode || "result"}`,
           timestamp: session.timestamp,
           user_input: session.submission.case_summary,
           submission: session.submission,
@@ -327,6 +364,70 @@
       ];
     }
     return [];
+  }
+
+  function isAutoTurn(turn) {
+    return /(^|\s)@auto\b/i.test(String(turn?.user_input || ""));
+  }
+
+  function autoFinalTurnForSession(session) {
+    const turns = buildTurnList(session);
+    if (!turns.some(isAutoTurn)) {
+      return null;
+    }
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turns[index]?.result?.execution_mode === "report") {
+        return turns[index];
+      }
+    }
+    return null;
+  }
+
+  function visibleTurnsForSession(session) {
+    const turns = buildTurnList(session);
+    const autoFinalTurn = autoFinalTurnForSession(session);
+    if (autoFinalTurn) {
+      return [autoFinalTurn];
+    }
+    return turns;
+  }
+
+  function latestApprovalForTurn(session, turnId) {
+    const approvals = Array.isArray(session?.doctor_approvals) ? session.doctor_approvals : [];
+    const matched = approvals.filter((item) => item?.turn_id === turnId);
+    return matched.length ? matched[matched.length - 1] : null;
+  }
+
+  function latestExecutorTurn(session) {
+    const turns = buildTurnList(session);
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turns[index]?.result?.execution_mode === "executor") {
+        return turns[index];
+      }
+    }
+    return null;
+  }
+
+  function hasReportTurn(session) {
+    return buildTurnList(session).some((turn) => turn?.result?.execution_mode === "report");
+  }
+
+  function evidenceFeedbackRows(session) {
+    const executorTurn = latestExecutorTurn(session);
+    const records = executorTurn?.result?.execution_records || [];
+    return records
+      .map((record, index) => {
+        const stepId = numericStepId(record?.step_id, index + 1);
+        if (!stepId) {
+          return null;
+        }
+        const display = resolveExecutionDisplay(record, executorTurn?.result?.plan_display_steps || [], index);
+        return {
+          evidence_id: `E${stepId}`,
+          label: display?.title_zh || `证据 ${stepId}`,
+        };
+      })
+      .filter(Boolean);
   }
 
   function createEditorTokenElement(token) {
@@ -364,6 +465,16 @@
       if (element.classList.contains("editor-token")) {
         const tokenLabel = element.dataset.tokenLabel || element.textContent || "";
         const tokenValue = element.dataset.tokenValue || "";
+        if (tokenValue === "auto" || tokenLabel === "@Auto") {
+          blocks.push({
+            type: "token",
+            label: tokenLabel || "@Auto",
+            text: "@Auto",
+            category: "agent",
+            value: "auto",
+          });
+          return;
+        }
         if (tokenValue === "planner" || tokenLabel === "@Planner") {
           blocks.push({
             type: "token",
@@ -381,6 +492,26 @@
             text: "@Executor",
             category: "agent",
             value: "executor",
+          });
+          return;
+        }
+        if (tokenValue === "decider" || tokenLabel === "@Decider") {
+          blocks.push({
+            type: "token",
+            label: tokenLabel || "@Decider",
+            text: "@Decider",
+            category: "agent",
+            value: "decider",
+          });
+          return;
+        }
+        if (tokenValue === "report" || tokenLabel === "@Report" || tokenLabel === "@Report Generator") {
+          blocks.push({
+            type: "token",
+            label: tokenLabel || "@Report",
+            text: "@Report",
+            category: "agent",
+            value: "report",
           });
           return;
         }
@@ -1087,6 +1218,15 @@
   }
 
   function ExecutionStatusCard({ executionMode, providerName, modelName, isPending = false }) {
+    if (executionMode === "auto") {
+      return html`
+        <div className=${cx("status-card", isPending && "is-pending")}>
+          <div className="status-card-title">@Auto</div>
+          <div className="status-card-copy">${isPending ? "正在自动执行完整诊断流程" : "已完成 planner 到 report 的自动执行"}</div>
+        </div>
+      `;
+    }
+
     if (executionMode === "planner") {
       return html`
         <div className=${cx("status-card", isPending && "is-pending")}>
@@ -1105,6 +1245,24 @@
       `;
     }
 
+    if (executionMode === "decider") {
+      return html`
+        <div className=${cx("status-card", isPending && "is-pending")}>
+          <div className="status-card-title">@Decider</div>
+          <div className="status-card-copy">${isPending ? "正在融合执行证据并形成诊断判断" : "已完成证据融合并形成诊断判断"}</div>
+        </div>
+      `;
+    }
+
+    if (executionMode === "report") {
+      return html`
+        <div className=${cx("status-card", isPending && "is-pending")}>
+          <div className="status-card-title">@Report</div>
+          <div className="status-card-copy">${isPending ? "正在整理证据并生成医疗报告" : "已生成带证据引用的医疗报告"}</div>
+        </div>
+      `;
+    }
+
     if (executionMode !== "single_model") {
       return null;
     }
@@ -1117,12 +1275,310 @@
     `;
   }
 
+  function StarRatingInput({ value, onChange, disabled = false }) {
+    return html`
+      <div className="star-rating" role="radiogroup" aria-label="rating">
+        ${[1, 2, 3, 4, 5].map((star) => html`
+          <button
+            key=${star}
+            type="button"
+            className=${cx("review-link-button", "star-rating-button", value >= star && "is-active")}
+            onClick=${() => !disabled && onChange(star)}
+            disabled=${disabled}
+            aria-label=${`${star} star`}
+          >
+            ★
+          </button>
+        `)}
+      </div>
+    `;
+  }
+
+  function DoctorApprovalPanel({ session, turn, onSubmit }) {
+    const latestApproval = latestApprovalForTurn(session, turn.turn_id);
+    const [note, setNote] = useState(latestApproval?.note || "");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    async function submit(action) {
+      setIsSubmitting(true);
+      try {
+        await onSubmit(session.session_id, turn.turn_id, action, note);
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+
+    return html`
+      <div className="doctor-review-panel">
+        <div className="doctor-review-head">
+          <div>
+            <div className="panel-title" style=${{ marginBottom: "6px" }}>医生审批</div>
+            <div className="doctor-review-copy">
+              ${latestApproval
+                ? `最近操作：${latestApproval.action === "approved" ? "已通过" : "要求修改"} · ${formatTimestamp(latestApproval.created_at)}`
+                : "当前阶段尚未审批。"}
+            </div>
+          </div>
+          ${latestApproval
+            ? html`<span className=${cx("review-badge", latestApproval.action === "approved" ? "is-approved" : "is-revision")}>
+                ${latestApproval.action === "approved" ? "已通过" : "待修改"}
+              </span>`
+            : null}
+        </div>
+        <textarea
+          className="review-note-input"
+          rows="3"
+          value=${note}
+          placeholder="填写审批意见或修改要求"
+          onInput=${(event) => setNote(event.target.value)}
+        ></textarea>
+        <div className="review-action-row">
+          <button type="button" className="review-action-button is-primary" disabled=${isSubmitting} onClick=${() => submit("approved")}>
+            通过
+          </button>
+          <button type="button" className="review-action-button" disabled=${isSubmitting} onClick=${() => submit("revision_requested")}>
+            要求修改
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function CaseFeedbackPanel({ session, onSubmit, autoFinal = false }) {
+    const rows = evidenceFeedbackRows(session);
+    const existing = session?.case_feedback || null;
+    const [open, setOpen] = useState(Boolean(autoFinal));
+    const [diagnosisRating, setDiagnosisRating] = useState(existing?.diagnosis_rating || 0);
+    const [reportRating, setReportRating] = useState(existing?.report_rating || 0);
+    const [comment, setComment] = useState(existing?.comment || "");
+    const [evidenceRatings, setEvidenceRatings] = useState(() => {
+      const base = {};
+      rows.forEach((row) => {
+        const matched = (existing?.evidence_ratings || []).find((item) => item?.evidence_id === row.evidence_id);
+        base[row.evidence_id] = matched?.rating || 0;
+      });
+      return base;
+    });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    function setEvidenceRating(evidenceId, rating) {
+      setEvidenceRatings((current) => ({ ...current, [evidenceId]: rating }));
+    }
+
+    async function submitFeedback() {
+      setIsSubmitting(true);
+      try {
+        await onSubmit(session.session_id, {
+          diagnosis_rating: diagnosisRating,
+          report_rating: reportRating,
+          evidence_ratings: rows.map((row) => ({
+            evidence_id: row.evidence_id,
+            rating: Number(evidenceRatings[row.evidence_id] || 0),
+          })),
+          comment,
+        });
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+
+    if (!rows.length || !hasReportTurn(session)) {
+      return null;
+    }
+
+    return html`
+      <div className=${cx("result-card", autoFinal && "auto-final-rating-card")}>
+        <div className="result-head">
+          <div>
+            <div className="result-title">${autoFinal ? "打分" : "病例评分"}</div>
+            ${autoFinal
+              ? null
+              : html`<div className="result-summary">${existing ? "评分已保存，可展开后修改。" : "医生可对证据、最终诊断和最终报告进行评分，数据会持久化保存用于后续分析。"}</div>`}
+          </div>
+          ${autoFinal
+            ? null
+            : html`
+                <button type="button" className="review-link-button" onClick=${() => setOpen((current) => !current)}>
+                  ${open ? "收起评分区" : "进入评分区"}
+                </button>
+              `}
+        </div>
+        ${open
+          ? html`
+              <div className="feedback-grid">
+                <div className="feedback-row">
+                  <span className="feedback-label">最终诊断</span>
+                  <${StarRatingInput} value=${diagnosisRating} onChange=${setDiagnosisRating} disabled=${isSubmitting} />
+                </div>
+                <div className="feedback-row">
+                  <span className="feedback-label">最终报告</span>
+                  <${StarRatingInput} value=${reportRating} onChange=${setReportRating} disabled=${isSubmitting} />
+                </div>
+                ${rows.map((row) => html`
+                  <div key=${row.evidence_id} className="feedback-row">
+                    <span className="feedback-label">${row.evidence_id} · ${row.label}</span>
+                    <${StarRatingInput}
+                      value=${Number(evidenceRatings[row.evidence_id] || 0)}
+                      onChange=${(rating) => setEvidenceRating(row.evidence_id, rating)}
+                      disabled=${isSubmitting}
+                    />
+                  </div>
+                `)}
+                <textarea
+                  className="review-note-input"
+                  rows="4"
+                  value=${comment}
+                  placeholder="补充评价意见"
+                  onInput=${(event) => setComment(event.target.value)}
+                ></textarea>
+                <div className="review-action-row">
+                  <button type="button" className="review-action-button is-primary" disabled=${isSubmitting} onClick=${submitFeedback}>
+                    保存评分
+                  </button>
+                </div>
+              </div>
+            `
+          : null}
+      </div>
+    `;
+  }
+
+  function autoStageStatus(mode, submission) {
+    const completedModes = Array.isArray(submission?.completed_modes) ? submission.completed_modes : [];
+    if (String(submission?.failed_stage || "") === mode) {
+      return "failed";
+    }
+    if (completedModes.includes(mode)) {
+      return "completed";
+    }
+    if (String(submission?.active_mode || "") === mode) {
+      return "running";
+    }
+    return "pending";
+  }
+
+  function AutoPipelineProgress({ submission }) {
+    const stages = [
+      { mode: "planner", title: "@Planner" },
+      { mode: "executor", title: "@Executor" },
+      { mode: "decider", title: "@Decider" },
+      { mode: "report", title: "@Report" },
+    ];
+    return html`
+      <div className="executor-metro">
+        <div className="executor-metro-head">
+          <div className="executor-metro-head-main">
+            <div className="panel-title" style=${{ marginBottom: 0 }}>自动流程</div>
+            <div className="executor-metro-summary">
+              <span>${(submission?.completed_modes || []).length}/${stages.length} 阶段</span>
+              ${submission?.active_mode ? html`<span>· 当前：${submission.active_mode}</span>` : null}
+            </div>
+          </div>
+        </div>
+        <div className="executor-metro-list">
+          ${stages.map((stage, index) => {
+            const status = autoStageStatus(stage.mode, submission);
+            return html`
+              <div key=${stage.mode} className="executor-metro-step">
+                <div className="executor-metro-rail">
+                  <span className=${cx("executor-metro-dot", `is-${status}`)}></span>
+                  ${index < stages.length - 1 ? html`<span className=${cx("executor-metro-line", `is-${status}`)}></span>` : null}
+                </div>
+                <div className="executor-metro-copy">
+                  <div className="executor-metro-step-title">${stage.title}</div>
+                  <div className="executor-metro-step-meta">
+                    ${status === "completed" ? "已完成" : status === "running" ? "执行中" : status === "failed" ? "失败" : "待执行"}
+                  </div>
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
+  function autoLiveStatusLabel(stage, status, submission) {
+    if (status === "completed") {
+      return "已完成";
+    }
+    if (status === "failed") {
+      return "失败";
+    }
+    if (status !== "running") {
+      return "等待中";
+    }
+    if (stage.mode === "planner") {
+      return "正在读取病例、检索参考知识并制定执行计划";
+    }
+    if (stage.mode === "executor") {
+      const done = Array.isArray(submission?.completed_step_ids) ? submission.completed_step_ids.length : 0;
+      const total = Number(submission?.step_count || 0);
+      return total ? `正在执行证据步骤 ${done}/${total}` : "正在执行证据采集";
+    }
+    if (stage.mode === "decider") {
+      return "正在融合证据并形成诊断判断";
+    }
+    if (stage.mode === "report") {
+      return "正在生成最终医疗报告";
+    }
+    return "执行中";
+  }
+
+  function AutoLiveStatusWindow({ submission }) {
+    const stages = [
+      { mode: "planner", title: "@Planner" },
+      { mode: "executor", title: "@Executor" },
+      { mode: "decider", title: "@Decider" },
+      { mode: "report", title: "@Report" },
+    ];
+    return html`
+      <div className="auto-live-window">
+        <div className="auto-live-head">
+          <div>
+            <div className="panel-title" style=${{ marginBottom: 0 }}>实时工作状态</div>
+            <div className="auto-live-copy">后台正在完成完整诊断流程；页面只显示状态，完成后直接打开最终报告。</div>
+          </div>
+          <span className="badge">streaming</span>
+        </div>
+        <div className="auto-live-list">
+          ${stages.map((stage) => {
+            const status = autoStageStatus(stage.mode, submission);
+            return html`
+              <div key=${stage.mode} className="auto-live-item">
+                <div className="auto-live-item-main">
+                  <span className=${cx("auto-live-dot", `is-${status}`)}></span>
+                  <span className="auto-live-stage">${stage.title}</span>
+                </div>
+                <span className="auto-live-item-copy">${autoLiveStatusLabel(stage, status, submission)}</span>
+              </div>
+            `;
+          })}
+        </div>
+        ${submission?.stream_transport_warning
+          ? html`<div className="auto-live-warning">实时连接曾中断，已切换为状态刷新；后台任务仍在继续。</div>`
+          : null}
+        ${submission?.stream_event_count
+          ? html`
+              <div className="auto-live-preview">
+                <div className="auto-live-preview-title">${submission.stream_label || "模型输出"}</div>
+                <pre>${submission.stream_label || "模型"} 正在生成结构化结果。已接收 ${submission.stream_event_count} 个流式片段。</pre>
+              </div>
+            `
+          : null}
+      </div>
+    `;
+  }
+
   function PendingWorkspace({ submission, execution, currentSession, meta }) {
     if (!submission) {
       return null;
     }
     const failed = Boolean(submission.error_message);
+    const isAuto = execution?.mode === "auto";
     const isExecutor = execution?.mode === "executor";
+    const isDecider = execution?.mode === "decider";
+    const isReport = execution?.mode === "report";
     const planDisplaySteps =
       submission.plan_display_steps ||
       currentSession?.result?.plan_display_steps ||
@@ -1130,21 +1586,45 @@
       [];
     const records = submission.execution_records || [];
     const contextSubmission = currentSession?.context_submission || currentSession?.submission || null;
-    const primaryAsset = imageAssetsFromSubmission(contextSubmission)[0] || null;
-    const pendingTitle = failed
+    const primaryAsset = imageAssetsFromSubmission(submission)[0] || imageAssetsFromSubmission(contextSubmission)[0] || null;
+    let pendingTitle = failed
       ? isExecutor
         ? "执行已中断"
+        : isDecider
+          ? "诊断判断失败"
+          : isReport
+            ? "报告生成失败"
         : "没有生成计划"
       : isExecutor
         ? submission.stage === "rendering"
           ? "正在整理执行结果"
           : "正在按计划执行"
+        : isDecider
+          ? "正在生成诊断判断"
+          : isReport
+            ? "正在生成医疗报告"
         : "正在生成结果";
-    const pendingSummary = failed
-      ? "Planner/Executor 严格模式下失败，不会 fallback 到半成品输出。错误详情如下。"
+    let pendingSummary = failed
+      ? "当前 agent 在严格模式下失败，不会 fallback 到半成品输出。错误详情如下。"
       : isExecutor
         ? pendingExecutorStatusCopy(submission, planDisplaySteps)
+        : isDecider
+          ? "系统正在收集当前上下文中的执行证据并形成 evidence-based 诊断判断。"
+          : isReport
+            ? "系统正在基于 Decider 判断与 Executor 证据生成带引用的医疗报告。"
         : "请求已提交，系统正在处理当前病例并准备回填临床结论。";
+    if (isAuto) {
+      pendingTitle = failed ? "自动流程执行失败" : "正在自动执行完整流程";
+      pendingSummary = failed
+        ? "当前 agent 在严格模式下失败，不会 fallback 到半成品输出。错误详情如下。"
+        : `系统正在串行执行 @Planner -> @Executor -> @Decider -> @Report。已完成 ${(submission.completed_modes || []).length}/4 个阶段。`;
+    }
+    if (isAuto) {
+      pendingTitle = failed ? "自动流程执行失败" : "正在生成最终报告";
+      pendingSummary = failed
+        ? "当前 agent 在严格模式下失败，不会 fallback 到半成品输出。错误详情如下。"
+        : "系统正在通过流式模型调用执行完整诊断流程。页面只展示实时工作状态，完成后直接打开最终报告。";
+    }
     const activeStep = (planDisplaySteps || []).find((step) => numericStepId(step?.id) === numericStepId(submission.active_step_id));
 
     return html`
@@ -1190,6 +1670,13 @@
                 `
               : null}
           </div>
+          ${isAuto
+            ? html`
+                <div className="info-panel" style=${{ marginTop: "18px" }}>
+                  <${AutoLiveStatusWindow} submission=${submission} />
+                </div>
+              `
+            : null}
           ${isExecutor && planDisplaySteps.length
             ? html`
                 <div className="info-panel" style=${{ marginTop: "18px" }}>
@@ -1546,7 +2033,7 @@
     const submission = session.submission;
     const records = result.execution_records || [];
     const planDisplaySteps = result.plan_display_steps || [];
-    const primaryAsset = imageAssetsFromSubmission(session.context_submission || submission)[0] || null;
+    const primaryAsset = imageAssetsFromSubmission(submission)[0] || imageAssetsFromSubmission(session.context_submission)[0] || null;
     return html`
       <div className="workspace-feed">
         <div className="message-card message-user">
@@ -1603,26 +2090,30 @@
     `;
   }
 
-  function ContextPanel({ submission, meta }) {
+  function ContextPanel({ submission, meta, compact = false }) {
     if (!submission) {
       return null;
     }
     const assets = imageAssetsFromSubmission(submission);
     return html`
-      <div className="result-card">
-        <div className="result-head">
+      <details className="result-card context-details" open=${!compact}>
+        <summary className="context-summary">
           <div>
             <div className="result-title">当前病例上下文</div>
-            <div className="result-summary">后续的 @Planner 和 @Executor 都会沿用这里的原始文本与图像资料。输入 /clear 可开始新的上下文。</div>
+            <div className="result-summary">
+              ${compact
+                ? `${submission.chief_complaint || submission.case_summary || "当前病例"} · ${assets.length ? assets.map((asset) => asset.name).filter(Boolean).join("，") : "无影像附件"}`
+                : "后续的 @Planner、@Executor、@Decider 和 @Report 都会沿用这里的原始文本与图像资料。输入 /clear 可开始新的上下文。"}
+            </div>
           </div>
           <div className="badge-row">
             <span className="badge">${label(meta, "department", submission.department)}</span>
             <span className="badge">${label(meta, "output", submission.output_style)}</span>
             <span className="badge">${label(meta, "urgency", submission.urgency)}</span>
           </div>
-        </div>
+        </summary>
 
-        <div className="info-panel">
+        <div className="info-panel context-body">
           <div className="panel-title">病例资料</div>
           <div className="info-list">
             ${submission.chief_complaint
@@ -1751,6 +2242,22 @@
     `;
   }
 
+  function DisplayQualityNotice({ warnings }) {
+    const items = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+    if (!items.length) {
+      return null;
+    }
+    return html`
+      <div className="display-quality-notice">
+        <div className="display-quality-title">中文展示需复核</div>
+        <div className="display-quality-copy">结构化结果已完成；以下问题只影响界面文案，不影响后端证据链。</div>
+        <ul>
+          ${items.slice(0, 4).map((item, index) => html`<li key=${index}>${item}</li>`)}
+        </ul>
+      </div>
+    `;
+  }
+
   function PlannerTurnCard({ turn, meta }) {
     const result = turn.result;
     const rows = result.plan_display_steps || [];
@@ -1769,6 +2276,7 @@
         </div>
         <div className="info-panel">
           <div className="panel-title">执行计划</div>
+          <${DisplayQualityNotice} warnings=${result.display_quality_warnings} />
           <div className="info-list">
             ${rows.map(
               (step, index) => html`
@@ -1792,8 +2300,7 @@
     const result = turn.result;
     const records = result.execution_records || [];
     const planDisplaySteps = result.plan_display_steps || [];
-    const assets = imageAssetsFromSubmission(contextSubmission || turn.submission);
-    const primaryAsset = assets[0] || null;
+    const primaryAsset = imageAssetsFromSubmission(turn.submission)[0] || imageAssetsFromSubmission(contextSubmission)[0] || null;
     return html`
       <div className="result-card">
         <div className="result-head">
@@ -1808,6 +2315,7 @@
           </div>
         </div>
         <div className="info-panel" style=${{ marginBottom: "18px" }}>
+          <${DisplayQualityNotice} warnings=${result.display_quality_warnings} />
           <${ExecutorMetroProgress}
             planDisplaySteps=${planDisplaySteps}
             records=${records}
@@ -1827,6 +2335,294 @@
               />
             `
           )}
+        </div>
+      </div>
+    `;
+  }
+
+  function parseObjectJson(value) {
+    if (!value) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(String(value));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function reportPayloadFromResult(result) {
+    return parseObjectJson(result?.raw_provider_payload) || {};
+  }
+
+  function evidenceIdLabel(ids) {
+    const values = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    return values.length ? values.join(", ") : "未引用";
+  }
+
+  function evidenceIdsFromItem(item) {
+    return Array.isArray(item?.evidence_ids) ? item.evidence_ids.map((value) => String(value || "").trim()).filter(Boolean) : [];
+  }
+
+  function recordForEvidenceId(records, evidenceId) {
+    const match = String(evidenceId || "").match(/^E(\d+)$/i);
+    if (!match) {
+      return null;
+    }
+    const stepId = Number(match[1]);
+    return (records || []).find((record) => numericStepId(record?.step_id) === stepId) || null;
+  }
+
+  function AutoEvidenceRecordDetail({ evidenceId, record, planDisplaySteps, asset, index }) {
+    if (!record) {
+      return html`
+        <div className="auto-final-evidence-missing">
+          ${evidenceId} 未在当前 Executor 记录中找到对应证据。
+        </div>
+      `;
+    }
+    const display = resolveExecutionDisplay(record, planDisplaySteps || [], index);
+    const evidence = record.evidence || {};
+    const confidence = typeof evidence.confidence === "number" ? `${Math.round(evidence.confidence * 100)}%` : "";
+    return html`
+      <div className="auto-final-evidence-detail">
+        <div className="auto-final-evidence-detail-head">
+          <span className="badge">${evidenceId}</span>
+          <strong>${display?.title_zh || `证据 ${evidenceId}`}</strong>
+          ${confidence ? html`<span className="badge">${confidence}</span>` : null}
+        </div>
+        <${ExecutionDisplayCopy} display=${display} />
+        <div className="auto-final-evidence-facts">
+          ${evidence.target_label ? html`<div><strong>目标：</strong>${evidence.target_label}</div>` : null}
+          ${evidence.conclusion ? html`<div><strong>结论：</strong>${normalizeEvidenceConclusion(evidence.conclusion)}</div>` : null}
+          ${evidence.rationale ? html`<div><strong>理由：</strong>${evidence.rationale}</div>` : null}
+        </div>
+        ${hasGroundingEvidence(record) && asset
+          ? html`<${StepEvidenceFigure} asset=${asset} record=${record} index=${index} />`
+          : hasGroundingEvidence(record)
+            ? html`<div className="auto-final-evidence-missing">该证据含定位坐标，但当前记录缺少原始图像，无法绘制证据图。</div>`
+            : null}
+      </div>
+    `;
+  }
+
+  function AutoEvidenceDisclosure({ item, records, planDisplaySteps, asset, index }) {
+    const evidenceIds = evidenceIdsFromItem(item);
+    const matchedRecords = evidenceIds.map((evidenceId) => ({
+      evidenceId,
+      record: recordForEvidenceId(records, evidenceId),
+    }));
+    return html`
+      <details className="auto-final-evidence-details">
+        <summary>
+          <span className="badge">${evidenceIdLabel(evidenceIds)}</span>
+          <span>${item.statement}</span>
+          <span className="auto-final-evidence-action">查看证据</span>
+        </summary>
+        <div className="auto-final-evidence-detail-list">
+          ${matchedRecords.length
+            ? matchedRecords.map(({ evidenceId, record }, recordIndex) => html`
+                <${AutoEvidenceRecordDetail}
+                  key=${evidenceId}
+                  evidenceId=${evidenceId}
+                  record=${record}
+                  planDisplaySteps=${planDisplaySteps}
+                  asset=${asset}
+                  index=${record ? Math.max(0, numericStepId(record.step_id, recordIndex + 1) - 1) : recordIndex}
+                />
+              `)
+            : html`<div className="auto-final-evidence-missing">该条报告未引用可展开的证据编号。</div>`}
+        </div>
+      </details>
+    `;
+  }
+
+  function ReportTurnCard({ turn, meta }) {
+    const result = turn.result;
+    const report = reportPayloadFromResult(result);
+    const findings = Array.isArray(report.evidence_based_findings) ? report.evidence_based_findings : [];
+    const recommendations = Array.isArray(report.recommendations) ? report.recommendations : [];
+    const differentials = Array.isArray(report.differential_diagnosis) ? report.differential_diagnosis : [];
+    const limitations = Array.isArray(report.limitations) ? report.limitations.filter(Boolean) : [];
+    const reviewChecklist = Array.isArray(report.doctor_review_checklist) ? report.doctor_review_checklist.filter(Boolean) : result.next_steps || [];
+    const rawModelText = result.raw_model_text || "";
+    const rawProviderRequest = result.raw_provider_request || "";
+    const rawProviderPayload = result.raw_provider_payload || "";
+    const confidence = Math.round(Number(result.consensus_score || 0) * 100);
+    return html`
+      <div className="result-card report-brief-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">${report.report_title || result.title}</div>
+            <div className="result-summary">${report.clinical_summary || result.executive_summary}</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">@Report</span>
+            <span className="badge">${label(meta, "department", result.department)}</span>
+            <span className="badge">${confidence}% 置信度</span>
+          </div>
+        </div>
+
+        <div className="report-brief-grid">
+          <section className="report-brief-section report-brief-primary">
+            <div className="panel-title">诊断结论</div>
+            <p>${report.diagnostic_assessment || result.executive_summary}</p>
+          </section>
+
+          <section className="report-brief-section">
+            <div className="panel-title">关键证据</div>
+            <div className="report-evidence-list">
+              ${findings.slice(0, 5).map((item, index) => html`
+                <div key=${index} className="report-evidence-item">
+                  <span className="badge">${evidenceIdLabel(item.evidence_ids)}</span>
+                  <span>${item.statement}</span>
+                </div>
+              `)}
+              ${!findings.length ? html`<div className="report-muted">暂无结构化证据条目。</div>` : null}
+            </div>
+          </section>
+
+          <section className="report-brief-section">
+            <div className="panel-title">下一步建议</div>
+            <div className="report-evidence-list">
+              ${recommendations.slice(0, 5).map((item, index) => html`
+                <div key=${index} className="report-evidence-item">
+                  <span className="badge">${evidenceIdLabel(item.evidence_ids)}</span>
+                  <span>
+                    <strong>${item.recommendation}</strong>
+                    ${item.rationale ? html`<em>${item.rationale}</em>` : null}
+                  </span>
+                </div>
+              `)}
+              ${!recommendations.length && reviewChecklist.length
+                ? reviewChecklist.slice(0, 5).map((item, index) => html`
+                    <div key=${index} className="report-evidence-item">
+                      <span className="badge">${index + 1}</span>
+                      <span>${item}</span>
+                    </div>
+                  `)
+                : null}
+              ${!recommendations.length && !reviewChecklist.length ? html`<div className="report-muted">暂无下一步建议。</div>` : null}
+            </div>
+          </section>
+
+          <section className="report-brief-section report-review-section">
+            <div className="panel-title">医生复核</div>
+            <div className="report-evidence-list">
+              ${reviewChecklist.slice(0, 4).map((item, index) => html`
+                <div key=${index} className="report-evidence-item">
+                  <span className="badge">${index + 1}</span>
+                  <span>${item}</span>
+                </div>
+              `)}
+              ${!reviewChecklist.length ? html`<div className="report-muted">${result.safety_note}</div>` : null}
+            </div>
+          </section>
+        </div>
+
+        <details className="result-raw-details report-detail-details">
+          <summary>展开完整报告与核查材料</summary>
+          <div className="result-raw-body">
+            <div className="markdown-panel" dangerouslySetInnerHTML=${{ __html: markdownToHtml(result.professional_answer) }}></div>
+
+            ${differentials.length
+              ? html`
+                  <div className="report-detail-panel">
+                    <div className="panel-title">鉴别诊断</div>
+                    <div className="report-evidence-list">
+                      ${differentials.map((item, index) => html`
+                        <div key=${index} className="report-evidence-item">
+                          <span className="badge">${evidenceIdLabel(item.evidence_ids)}</span>
+                          <span><strong>${item.name}</strong>${item.assessment ? html`<em>${item.assessment}</em>` : null}</span>
+                        </div>
+                      `)}
+                    </div>
+                  </div>
+                `
+              : null}
+
+            ${limitations.length
+              ? html`
+                  <div className="report-detail-panel">
+                    <div className="panel-title">局限性</div>
+                    <div className="info-list">
+                      ${limitations.map((item, index) => html`
+                        <div key=${index} className="info-list-item">
+                          <${Icon} name="history" size=${16} />
+                          <span>${item}</span>
+                        </div>
+                      `)}
+                    </div>
+                  </div>
+                `
+              : null}
+
+            ${report.patient_facing_note
+              ? html`
+                  <div className="report-detail-panel">
+                    <div className="panel-title">患者说明</div>
+                    <p className="report-muted">${report.patient_facing_note}</p>
+                  </div>
+                `
+              : null}
+
+            ${rawModelText || rawProviderRequest || rawProviderPayload
+              ? html`
+                  <details className="result-raw-details">
+                    <summary>查看原始模型响应</summary>
+                    <div className="result-raw-body">
+                      <div className="result-raw-label">请求 JSON</div>
+                      <pre className="result-raw-block">${rawProviderRequest || "当前记录未保存请求 JSON。"}</pre>
+                      <div className="result-raw-label">结构化报告 JSON</div>
+                      <pre className="result-raw-block">${rawProviderPayload || "当前记录未保存结构化报告 JSON。"}</pre>
+                      <div className="result-raw-label">模型文本</div>
+                      <pre className="result-raw-block">${rawModelText || "当前记录未保存模型原始文本。"}</pre>
+                    </div>
+                  </details>
+                `
+              : null}
+          </div>
+        </details>
+      </div>
+    `;
+  }
+
+  function AutoFinalConclusion({ turn }) {
+    const result = turn.result;
+    const report = reportPayloadFromResult(result);
+    const assessment = String(report.diagnostic_assessment || "").trim();
+    const findings = Array.isArray(report.evidence_based_findings) ? report.evidence_based_findings : [];
+    const records = Array.isArray(result.execution_records) ? result.execution_records : [];
+    const planDisplaySteps = Array.isArray(result.plan_display_steps) ? result.plan_display_steps : [];
+    const primaryAsset = imageAssetsFromSubmission(turn.submission)[0] || null;
+    const confidence = Math.round(Number(result.consensus_score || 0) * 100);
+    return html`
+      <div className="result-card auto-final-report-card">
+        <div className="auto-final-report-head">
+          <div>
+            <div className="panel-title">证据化报告</div>
+            <div className="auto-final-assessment">
+              ${assessment || "报告缺少 diagnostic_assessment，无法展示最终结论。"}
+            </div>
+          </div>
+          <div className="auto-final-meta">
+            <span className="badge">${confidence}% 置信度</span>
+          </div>
+        </div>
+
+        <div className="auto-final-evidence-list">
+          ${findings.slice(0, 5).map((item, index) => html`
+            <${AutoEvidenceDisclosure}
+              key=${index}
+              item=${item}
+              records=${records}
+              planDisplaySteps=${planDisplaySteps}
+              asset=${primaryAsset}
+              index=${index}
+            />
+          `)}
+          ${!findings.length ? html`<div className="report-muted">暂无结构化证据条目。</div>` : null}
         </div>
       </div>
     `;
@@ -1925,19 +2721,24 @@
     `;
   }
 
-  function TurnWorkspace({ turn, meta, contextSubmission }) {
+  function TurnWorkspace({ turn, meta, contextSubmission, session, onSubmitApproval }) {
     const result = turn.result;
     const submission = turn.submission;
+    const autoTurn = isAutoTurn(turn);
     return html`
       <div>
-        <div className="message-card message-user">
-          <div className="message-meta">
-            <span>当前输入</span>
-            <span>·</span>
-            <span>${formatTimestamp(turn.timestamp)}</span>
-          </div>
-          <div className="message-body">${turn.user_input || submission.case_summary}</div>
-        </div>
+        ${autoTurn
+          ? null
+          : html`
+              <div className="message-card message-user">
+                <div className="message-meta">
+                  <span>当前输入</span>
+                  <span>·</span>
+                  <span>${formatTimestamp(turn.timestamp)}</span>
+                </div>
+                <div className="message-body">${turn.user_input || submission.case_summary}</div>
+              </div>
+            `}
 
         <${ExecutionStatusCard}
           executionMode=${result.execution_mode}
@@ -1949,12 +2750,17 @@
           ? html`<${PlannerTurnCard} turn=${turn} meta=${meta} />`
           : result.execution_mode === "executor"
             ? html`<${ExecutorTurnCard} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`
-            : html`<${GeneralTurnCard} turn=${turn} meta=${meta} />`}
+            : result.execution_mode === "report"
+              ? html`<${ReportTurnCard} turn=${turn} meta=${meta} />`
+              : html`<${GeneralTurnCard} turn=${turn} meta=${meta} />`}
+        ${session && turn?.turn_id && onSubmitApproval
+          ? html`<${DoctorApprovalPanel} session=${session} turn=${turn} onSubmit=${onSubmitApproval} />`
+          : null}
       </div>
     `;
   }
 
-  function ResultWorkspace({ session, meta }) {
+  function ResultWorkspace({ session, meta, onSubmitApproval, onSubmitFeedback }) {
     if (!session) {
       return null;
     }
@@ -1964,11 +2770,30 @@
     }
 
     const contextSubmission = session.context_submission || session.submission;
-    const turns = buildTurnList(session);
+    const turns = visibleTurnsForSession(session);
+    const autoFinalTurn = autoFinalTurnForSession(session);
+    if (autoFinalTurn) {
+      return html`
+        <div className="workspace-feed auto-final-feed">
+          <${AutoFinalConclusion} turn=${autoFinalTurn} />
+          ${onSubmitFeedback ? html`<${CaseFeedbackPanel} key=${`${session.session_id}-feedback`} session=${session} onSubmit=${onSubmitFeedback} autoFinal=${true} />` : null}
+        </div>
+      `;
+    }
     return html`
       <div className="workspace-feed">
-        <${ContextPanel} submission=${contextSubmission} meta=${meta} />
-        ${turns.map((turn, index) => html`<${TurnWorkspace} key=${`${turn.timestamp}-${index}`} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`)}
+        <${ContextPanel} submission=${contextSubmission} meta=${meta} compact=${false} />
+        ${turns.map((turn, index) => html`
+          <${TurnWorkspace}
+            key=${turn.turn_id || `${turn.timestamp}-${index}`}
+            turn=${turn}
+            meta=${meta}
+            contextSubmission=${contextSubmission}
+            session=${session}
+            onSubmitApproval=${onSubmitApproval}
+          />
+        `)}
+        ${onSubmitFeedback ? html`<${CaseFeedbackPanel} key=${`${session.session_id}-feedback`} session=${session} onSubmit=${onSubmitFeedback} />` : null}
       </div>
     `;
   }
@@ -1987,7 +2812,10 @@
   }
 
   function DataTableCard({ title, columns, rows }) {
-    const safeRows = rows || [];
+    const safeRows = Array.isArray(rows) ? rows : [];
+    if (!safeRows.length) {
+      return null;
+    }
     return html`
       <div className="table-card">
         <div className="table-head">
@@ -2718,6 +3546,8 @@
     selectedSession,
     isLoadingDetail,
     onBack,
+    onSubmitApproval,
+    onSubmitFeedback,
   }) {
     const [sortMode, setSortMode] = useState("date_desc");
     const visibleCount = useMemo(() => sessions.filter((session) => session.show_in_sidebar !== false).length, [sessions]);
@@ -2747,7 +3577,7 @@
 
           ${isLoadingDetail
             ? html`<div className="empty-feed">正在加载会诊记录…</div>`
-            : html`<${ResultWorkspace} session=${selectedSession} meta=${meta} />`}
+                    : html`<${ResultWorkspace} session=${selectedSession} meta=${meta} onSubmitApproval=${onSubmitApproval} onSubmitFeedback=${onSubmitFeedback} />`}
         </div>
       `;
     }
@@ -3376,6 +4206,8 @@
     historyPreviewSession,
     isHistoryPreviewLoading,
     onCloseHistoryPreview,
+    onSubmitApproval,
+    onSubmitFeedback,
     adminAccounts,
     accountDraft,
     setAccountDraft,
@@ -3436,6 +4268,8 @@
             selectedSession=${historyPreviewSession}
             isLoadingDetail=${isHistoryPreviewLoading}
             onBack=${onCloseHistoryPreview}
+            onSubmitApproval=${onSubmitApproval}
+            onSubmitFeedback=${onSubmitFeedback}
           />
         `}
 
@@ -3593,20 +4427,27 @@
       }
       let disposed = false;
       let timerId = null;
+      const jobPath = pendingSubmission?.execution?.mode === "auto" ? "/api/auto-jobs" : "/api/executor-jobs";
+      const completionNotice = pendingSubmission?.execution?.mode === "auto" ? "Auto 流程已完成。" : "Executor 已完成执行。";
 
-      async function pollExecutorJob() {
+      async function pollJob() {
         try {
-          const data = await fetchJson(`/api/executor-jobs/${pendingSubmission.job_id}`);
+          const data = await fetchJson(`${jobPath}/${pendingSubmission.job_id}`);
           if (disposed) {
             return;
           }
           const job = data.job || {};
+          if (job.session) {
+            setCurrentSession(job.session);
+            applySessionList(job.sessions || []);
+            setActiveView("workspace");
+          }
           if (job.status === "completed" && job.session) {
             setCurrentSession(job.session);
             applySessionList(job.sessions || []);
             setPendingSubmission(null);
             setActiveView("workspace");
-            pushNotice("Executor 已完成执行。");
+            pushNotice(completionNotice);
             return;
           }
           setPendingSubmission((current) =>
@@ -3638,15 +4479,174 @@
           }
           return;
         }
-        timerId = window.setTimeout(pollExecutorJob, 1200);
+        timerId = window.setTimeout(pollJob, 1200);
       }
 
-      pollExecutorJob();
+      pollJob();
       return () => {
         disposed = true;
         if (timerId) {
           window.clearTimeout(timerId);
         }
+      };
+    }, [pendingSubmission?.job_id]);
+
+    useEffect(() => {
+      if (!pendingSubmission?.job_id || pendingSubmission?.execution?.mode !== "auto") {
+        return undefined;
+      }
+      const jobId = pendingSubmission.job_id;
+      const controller = new AbortController();
+      let disposed = false;
+      let terminalReceived = false;
+
+      function applyAutoJob(job) {
+        if (!job || disposed) {
+          return;
+        }
+        if (job.status === "completed" && !job.session) {
+          terminalReceived = true;
+          fetchJson(`/api/auto-jobs/${jobId}`)
+            .then((data) => applyAutoJob(data.job || {}))
+            .catch((error) => {
+              setPendingSubmission((current) =>
+                current && current.job_id === jobId
+                  ? {
+                      ...current,
+                      status: "failed",
+                      stage: "failed",
+                      error_message: error.message,
+                    }
+                  : current
+              );
+            });
+          return;
+        }
+        if (job.status === "completed" && job.session) {
+          terminalReceived = true;
+          setCurrentSession(job.session);
+          applySessionList(job.sessions || []);
+          setPendingSubmission(null);
+          setActiveView("workspace");
+          pushNotice("Auto 流程已完成。");
+          return;
+        }
+        setPendingSubmission((current) =>
+          current && current.job_id === job.job_id
+            ? {
+                ...current,
+                ...job,
+              }
+            : current
+        );
+        if (job.status === "failed") {
+          terminalReceived = true;
+        }
+      }
+
+      function applyStreamChunk(chunk) {
+        const dataLines = chunk
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .filter(Boolean);
+        if (!dataLines.length) {
+          return;
+        }
+        const payload = JSON.parse(dataLines.join("\n"));
+        applyAutoJob(payload.job || {});
+      }
+
+      async function recoverAutoJobAfterStreamError(error) {
+        const data = await fetchJson(`/api/auto-jobs/${jobId}`);
+        const job = data.job || {};
+        applyAutoJob(job);
+        if (job.status === "completed" || job.status === "failed") {
+          return;
+        }
+        setPendingSubmission((current) =>
+          current && current.job_id === jobId
+            ? {
+                ...current,
+                ...job,
+                stream_transport_warning: error.message || "Auto stream interrupted.",
+              }
+            : current
+        );
+        window.setTimeout(() => {
+          if (!disposed) {
+            recoverAutoJobAfterStreamError(error).catch(() => {});
+          }
+        }, 2000);
+      }
+
+      async function streamAutoJob() {
+        try {
+          const token = readAuthToken();
+          const response = await fetch(`/api/auto-jobs/${jobId}/stream`, {
+            headers: {
+              Accept: "text/event-stream",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            if (response.status === 401) {
+              writeAuthToken("");
+            }
+            const detail = await response.text();
+            throw new Error(detail || `Auto stream failed with status ${response.status}.`);
+          }
+          if (!response.body) {
+            throw new Error("Auto stream response has no readable body.");
+          }
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split(/\n\n/);
+            buffer = chunks.pop() || "";
+            chunks.forEach(applyStreamChunk);
+          }
+          buffer += decoder.decode();
+          if (buffer.trim()) {
+            applyStreamChunk(buffer);
+          }
+          if (!terminalReceived && !disposed) {
+            await recoverAutoJobAfterStreamError(new Error("Auto stream closed before completion."));
+          }
+        } catch (error) {
+          if (disposed || controller.signal.aborted) {
+            return;
+          }
+          if (!handleAuthError(error)) {
+            try {
+              await recoverAutoJobAfterStreamError(error);
+            } catch (recoverError) {
+              setPendingSubmission((current) =>
+                current && current.job_id === jobId
+                  ? {
+                      ...current,
+                      status: "failed",
+                      stage: "failed",
+                      error_message: recoverError.message || error.message,
+                    }
+                  : current
+              );
+            }
+          }
+        }
+      }
+
+      streamAutoJob();
+      return () => {
+        disposed = true;
+        controller.abort();
       };
     }, [pendingSubmission?.job_id]);
 
@@ -3694,6 +4694,58 @@
         if (!handleAuthError(error)) {
           pushNotice(error.message, "error");
         }
+      }
+    }
+
+    async function submitApproval(sessionId, turnId, action, note) {
+      try {
+        const data = await fetchJson(`/api/sessions/${sessionId}/approvals`, {
+          method: "POST",
+          body: JSON.stringify({
+            turn_id: turnId,
+            action,
+            note,
+          }),
+        });
+        setCurrentSession(data.session);
+        setHistoryPreviewSession((current) => (current?.session_id === data.session.session_id ? data.session : current));
+        applySessionList(
+          sessions.map((item) =>
+            item.session_id === data.session.session_id
+              ? { ...item, timestamp: data.session.timestamp, title: data.session.title, summary: data.session.summary }
+              : item
+          )
+        );
+        pushNotice(action === "approved" ? "已记录通过意见。" : "已记录修改要求。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
+        throw error;
+      }
+    }
+
+    async function submitFeedback(sessionId, payload) {
+      try {
+        const data = await fetchJson(`/api/sessions/${sessionId}/feedback`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setCurrentSession(data.session);
+        setHistoryPreviewSession((current) => (current?.session_id === data.session.session_id ? data.session : current));
+        applySessionList(
+          sessions.map((item) =>
+            item.session_id === data.session.session_id
+              ? { ...item, timestamp: data.session.timestamp, title: data.session.title, summary: data.session.summary }
+              : item
+          )
+        );
+        pushNotice("病例评分已保存。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
+        throw error;
       }
     }
 
@@ -3796,16 +4848,26 @@
       }
       setIsSubmitting(true);
       try {
+        const autoRequested = isAutoInvocation(composer.case_summary);
         const plannerRequested = isPlannerInvocation(composer.case_summary);
         const executorRequested = isExecutorInvocation(composer.case_summary);
-        const imageAssets = plannerRequested || executorRequested ? await serializeImageAssets(composer.image_files) : [];
-        const execution = executorRequested
-          ? { mode: "executor", ...resolveRoleExecution(settings, "Executor") }
-          : plannerRequested
-            ? { mode: "planner", ...resolveRoleExecution(settings, "Planner") }
-          : composer.single_model_test
-            ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
-            : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
+        const deciderRequested = isDeciderInvocation(composer.case_summary);
+        const reportRequested = isReportInvocation(composer.case_summary);
+        const imageAssets = plannerRequested || executorRequested || autoRequested ? await serializeImageAssets(composer.image_files) : [];
+        const anyAgentRequested = autoRequested || plannerRequested || executorRequested || deciderRequested || reportRequested;
+        const execution = autoRequested
+          ? { mode: "auto", providerName: "Auto Pipeline", modelName: "Planner -> Executor -> Decider -> Report", roleName: "Auto" }
+          : reportRequested
+          ? { mode: "report", ...resolveRoleExecution(settings, "Report Generator") }
+          : deciderRequested
+            ? { mode: "decider", ...resolveRoleExecution(settings, "Decider") }
+            : executorRequested
+              ? { mode: "executor", ...resolveRoleExecution(settings, "Executor") }
+              : plannerRequested
+                ? { mode: "planner", ...resolveRoleExecution(settings, "Planner") }
+                : composer.single_model_test
+                  ? { mode: "single_model", ...resolveSingleModelExecution(settings) }
+                  : { mode: "multi_agent", providerName: "", modelName: "", roleName: "" };
         const payload = {
           case_summary: composer.case_summary,
           chief_complaint: composer.chief_complaint,
@@ -3816,7 +4878,7 @@
           output_style: composer.output_style,
           urgency: composer.urgency,
           show_process: composer.show_process,
-          single_model_test: plannerRequested || executorRequested ? false : composer.single_model_test,
+          single_model_test: anyAgentRequested ? false : composer.single_model_test,
           uploaded_images: composer.image_files.map((file) => file.name),
           uploaded_docs: composer.doc_files.map((file) => file.name),
           uploaded_image_assets: imageAssets,
@@ -3824,7 +4886,42 @@
         };
         const pendingTimestamp = new Date().toLocaleString("zh-CN", { hour12: false });
         setActiveView("workspace");
-        if (executorRequested) {
+        if (autoRequested) {
+          setPendingSubmission({
+            timestamp: pendingTimestamp,
+            case_summary: composer.case_summary,
+            execution,
+            status: "queued",
+            stage: "queued",
+            active_mode: "",
+            active_step_id: null,
+            failed_stage: "",
+            failed_step_id: null,
+            step_count: 0,
+            completed_modes: [],
+            plan_display_steps: [],
+            execution_records: [],
+            error_message: "",
+          });
+          const data = await fetchJson("/api/auto-jobs", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          setPendingSubmission((current) =>
+            current
+              ? {
+                  ...current,
+                  ...(data.job || {}),
+                }
+              : null
+          );
+          setComposer((current) => ({
+            ...makeDefaultComposer(meta, settings),
+            input_expanded: current.input_expanded,
+            single_model_test: current.single_model_test,
+          }));
+          pushNotice("Auto 流程已启动。");
+        } else if (executorRequested) {
           setPendingSubmission({
             timestamp: pendingTimestamp,
             case_summary: composer.case_summary,
@@ -3875,7 +4972,15 @@
             single_model_test: current.single_model_test,
           }));
           setActiveView("workspace");
-          pushNotice("会诊已生成。");
+          pushNotice(
+            reportRequested
+              ? "Report 已生成。"
+              : deciderRequested
+                ? "Decider 已完成证据融合。"
+                : plannerRequested
+                  ? "Planner 已生成执行计划。"
+                  : "会诊已生成。"
+          );
         }
       } catch (error) {
         setPendingSubmission((current) =>
@@ -4209,11 +5314,13 @@
             testingRoleName=${testingRoleName}
             onToggleSidebarSession=${setSessionSidebarVisibility}
             onSetAllSidebarSessions=${setAllSidebarSessions}
-            visibilityBusyKey=${visibilityBusyKey}
-            historyPreviewSession=${historyPreviewSession}
-                        isHistoryPreviewLoading=${isHistoryPreviewLoading}
-                        onCloseHistoryPreview=${closeHistoryPreview}
-                        adminAccounts=${adminAccounts}
+             visibilityBusyKey=${visibilityBusyKey}
+             historyPreviewSession=${historyPreviewSession}
+                         isHistoryPreviewLoading=${isHistoryPreviewLoading}
+                         onCloseHistoryPreview=${closeHistoryPreview}
+                         onSubmitApproval=${submitApproval}
+                         onSubmitFeedback=${submitFeedback}
+                         adminAccounts=${adminAccounts}
                         accountDraft=${accountDraft}
                         setAccountDraft=${setAccountDraft}
                         onCreateAccount=${createAccount}
@@ -4224,10 +5331,19 @@
                       />
                     `
                   : pendingSubmission
-                    ? currentSession
+                    ? pendingSubmission.execution?.mode === "auto"
+                      ? html`
+                          <${PendingWorkspace}
+                            submission=${pendingSubmission}
+                            execution=${pendingSubmission.execution}
+                            currentSession=${currentSession}
+                            meta=${meta}
+                          />
+                        `
+                      : currentSession
                       ? html`
                           <div className="workspace-feed">
-                            <${ResultWorkspace} session=${currentSession} meta=${meta} />
+                            <${ResultWorkspace} session=${currentSession} meta=${meta} onSubmitApproval=${submitApproval} onSubmitFeedback=${submitFeedback} />
                             <${PendingWorkspace}
                               submission=${pendingSubmission}
                               execution=${pendingSubmission.execution}
@@ -4244,7 +5360,7 @@
                             meta=${meta}
                           />
                         `
-                    : html`<${ResultWorkspace} session=${currentSession} meta=${meta} />`}
+                    : html`<${ResultWorkspace} session=${currentSession} meta=${meta} onSubmitApproval=${submitApproval} onSubmitFeedback=${submitFeedback} />`}
               </div>
 
               ${activeView === "workspace" &&

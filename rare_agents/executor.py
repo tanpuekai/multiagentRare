@@ -10,7 +10,7 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from rare_agents.display_composer import compose_execution_display
+from rare_agents.display_composer import compose_execution_display_projection
 from rare_agents.grounding_harness import (
     clamp01,
     build_harness_constraints,
@@ -20,6 +20,7 @@ from rare_agents.grounding_harness import (
     run_vlm_grounding_harness,
 )
 from rare_agents.models import AppProfile, CaseSubmission, EngineResult, SystemSettings
+from rare_agents.provider_client import StreamCallback, request_chat_completion_stream
 
 
 EXECUTOR_AGENT_NAME = "Executor"
@@ -120,16 +121,29 @@ def _safe_image_payloads(image_payloads: list[dict[str, Any]] | None) -> list[di
     return cleaned
 
 
-def _executor_request(provider: Any, messages: list[dict[str, Any]], *, max_tokens: int) -> str:
+def _executor_request(
+    provider: Any,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int,
+    stream_callback: StreamCallback | None = None,
+) -> str:
     url = f"{_normalize_provider_endpoint(provider.endpoint).rstrip('/')}/chat/completions"
-    payload = json.dumps(
-        {
-            "model": provider.model_name,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0,
-        }
-    ).encode("utf-8")
+    body = {
+        "model": provider.model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+    }
+    if stream_callback is not None:
+        return request_chat_completion_stream(
+            url=url,
+            api_key=provider.api_key,
+            body=body,
+            user_agent="RareMDT-Executor/0.1",
+            on_delta=stream_callback,
+        )
+    payload = json.dumps(body).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
         "Accept": "application/json",
@@ -204,6 +218,7 @@ def _request_json_with_image(
     prompt: str,
     max_tokens: int,
     system_prompt: str,
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     raw = _executor_request(
         provider,
@@ -218,6 +233,7 @@ def _request_json_with_image(
             },
         ],
         max_tokens=max_tokens,
+        stream_callback=stream_callback,
     )
     parsed = _parse_llm_json(raw)
     if not isinstance(parsed, dict):
@@ -225,7 +241,7 @@ def _request_json_with_image(
     return parsed
 
 
-def _harness_requester(provider: Any):
+def _harness_requester(provider: Any, stream_callback: StreamCallback | None = None):
     def request_json(data_url: Any, prompt: str, max_tokens: int, system_prompt: str) -> dict[str, Any]:
         return _request_json_with_image(
             provider,
@@ -233,12 +249,13 @@ def _harness_requester(provider: Any):
             prompt=prompt,
             max_tokens=max_tokens,
             system_prompt=system_prompt,
+            stream_callback=stream_callback,
         )
 
     return request_json
 
 
-def _request_vision_probe(provider: Any, image_payload: dict[str, str]) -> dict[str, Any]:
+def _request_vision_probe(provider: Any, image_payload: dict[str, str], stream_callback: StreamCallback | None = None) -> dict[str, Any]:
     parsed = _request_json_with_image(
         provider,
         data_url=image_payload["data_url"],
@@ -264,6 +281,7 @@ def _request_vision_probe(provider: Any, image_payload: dict[str, str]) -> dict[
             """
         ).strip(),
         max_tokens=900,
+        stream_callback=stream_callback,
     )
     probe = {
         "modality": str(parsed.get("modality", "")).strip(),
@@ -296,18 +314,19 @@ def _request_grounding(
     harness_text: str = "",
     max_tokens: int = 2200,
     require_boundary: bool = True,
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     del prompt, relationship, harness_text, max_tokens
     if not require_boundary:
         return run_vlm_bbox_grounding_harness(
-            request_json=_harness_requester(provider),
+            request_json=_harness_requester(provider, stream_callback),
             image_payload=image_payload,
             step=step,
             target_label=target_label,
             parent_output=parent_output,
         )
     return run_vlm_grounding_harness(
-        request_json=_harness_requester(provider),
+        request_json=_harness_requester(provider, stream_callback),
         image_payload=image_payload,
         step=step,
         target_label=target_label,
@@ -318,7 +337,16 @@ def _request_grounding(
 
 _GENERIC_GROUNDING_LABELS = {
     "",
+    "abnormality",
+    "finding",
+    "image finding",
+    "lesion",
+    "mass",
+    "nodule",
+    "object",
+    "region",
     "target region",
+    "target",
     "boundary points",
     "boundary point",
     "instance boundary",
@@ -327,12 +355,20 @@ _GENERIC_GROUNDING_LABELS = {
     "mask",
     "roi",
     "sparse landmark",
+    "structure",
+    "visible target",
 }
 
 
 def _clean_grounding_target_text(value: str) -> str:
     text = re.sub(r"[_\-]+", " ", str(value or "")).strip()
     text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"^(ground|localize|segment|trace|identify)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(the|a|an)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(complete|entire|full|requested)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^visible\s+extent\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^boundary\s+of\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^outer\s+boundary\s+of\s+", "", text, flags=re.IGNORECASE)
     for splitter in [
         r"\s+with\s+",
         r"\s+as\s+",
@@ -354,13 +390,23 @@ def _clean_grounding_target_text(value: str) -> str:
     return text
 
 
+def _is_generic_grounding_label(value: object) -> bool:
+    text = re.sub(r"[_\-]+", " ", str(value or "").lower()).strip()
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return not text or text in _GENERIC_GROUNDING_LABELS
+
+
 def _derive_grounding_target_label(step: dict[str, Any]) -> str:
     tool_config = step.get("tool_config") if isinstance(step.get("tool_config"), dict) else {}
+    target_label = _clean_grounding_target_text(str(tool_config.get("target_label") or step.get("target_label") or ""))
+    if target_label and not _is_generic_grounding_label(target_label):
+        return target_label
     seg_type = _clean_grounding_target_text(str(tool_config.get("seg_type") or ""))
-    if seg_type and seg_type.lower() not in _GENERIC_GROUNDING_LABELS:
+    if seg_type and not _is_generic_grounding_label(seg_type):
         return seg_type
     finding = str(step.get("finding") or "").strip()
-    if finding and finding.lower() not in _GENERIC_GROUNDING_LABELS:
+    if finding and not _is_generic_grounding_label(finding):
         return finding
     action = str(step.get("action") or "").strip()
     text = re.sub(r"\s+", " ", action)
@@ -391,6 +437,7 @@ def _run_evidence_vlm_step(
     provider: Any,
     image_payload: dict[str, str],
     outputs: dict[int, dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     parent_output = outputs.get(int(step.get("relative_to_step") or 0)) if step.get("relative_to_step") else None
     target_label = _derive_grounding_target_label(step)
@@ -405,6 +452,7 @@ def _run_evidence_vlm_step(
         harness_text=build_harness_constraints(step, parent_output),
         max_tokens=1800,
         require_boundary=True,
+        stream_callback=stream_callback,
     )
     return {
         "artifact_type": "grounding",
@@ -413,6 +461,9 @@ def _run_evidence_vlm_step(
         "conclusion": "localized",
         "confidence": evidence["confidence"],
         "rationale": evidence["rationale"],
+        "target_understanding": evidence.get("target_understanding", ""),
+        "boundary_definition": evidence.get("boundary_definition", ""),
+        "excluded_regions": evidence.get("excluded_regions", []),
         "grounding": evidence["grounding"],
         "validation": evidence.get("validation", {}),
         "harness": evidence.get("harness", {}),
@@ -507,7 +558,13 @@ def _run_coding_step(step: dict[str, Any], *, outputs: dict[int, dict[str, Any]]
     }
 
 
-def _run_text_vlm_step(step: dict[str, Any], *, provider: Any, outputs: dict[int, dict[str, Any]]) -> dict[str, Any]:
+def _run_text_vlm_step(
+    step: dict[str, Any],
+    *,
+    provider: Any,
+    outputs: dict[int, dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
+) -> dict[str, Any]:
     parents = [outputs[parent] for parent in step.get("input_type", []) if parent in outputs]
     context = {
         "upstream_evidence": [parent.get("evidence", {}) for parent in parents],
@@ -542,6 +599,7 @@ def _run_text_vlm_step(step: dict[str, Any], *, provider: Any, outputs: dict[int
             },
         ],
         max_tokens=1200,
+        stream_callback=stream_callback,
     )
     parsed = _parse_llm_json(raw)
     if not isinstance(parsed, dict):
@@ -572,6 +630,7 @@ def _run_same_target_indicator_step(
     provider: Any,
     image_payload: dict[str, str],
     parent_output: dict[str, Any],
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     finding = str(step.get("finding") or step.get("action") or "target finding").strip()
     parent = parent_grounding(parent_output)
@@ -612,6 +671,7 @@ def _run_same_target_indicator_step(
             },
         ],
         max_tokens=1200,
+        stream_callback=stream_callback,
     )
     parsed = _parse_llm_json(raw)
     if not isinstance(parsed, dict):
@@ -643,6 +703,7 @@ def _run_vlm_step(
     provider: Any,
     image_payload: dict[str, str],
     outputs: dict[int, dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     relationship, parent_output = _relationship_from_step_or_context(step, outputs)
     if relationship == "same_target" and parent_output is not None:
@@ -651,6 +712,7 @@ def _run_vlm_step(
             provider=provider,
             image_payload=image_payload,
             parent_output=parent_output,
+            stream_callback=stream_callback,
         )
     finding = str(step.get("finding") or step.get("action") or "target finding").strip()
     return {
@@ -667,6 +729,7 @@ def _run_vlm_step(
             harness_text=build_harness_constraints(step, parent_output),
             max_tokens=2200,
             require_boundary=False,
+            stream_callback=stream_callback,
         ),
     }
 
@@ -677,20 +740,33 @@ def _execute_step(
     provider: Any,
     image_payload: dict[str, str] | None,
     outputs: dict[int, dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
 ) -> dict[str, Any]:
     tool_type = str((step.get("tool_config") or {}).get("tool_type") or "")
     if tool_type == "evidence_vlm":
         if image_payload is None:
             raise ValueError("Executor needs an image to run grounding steps.")
-        evidence = _run_evidence_vlm_step(step, provider=provider, image_payload=image_payload, outputs=outputs)
+        evidence = _run_evidence_vlm_step(
+            step,
+            provider=provider,
+            image_payload=image_payload,
+            outputs=outputs,
+            stream_callback=stream_callback,
+        )
     elif tool_type == "coding":
         evidence = _run_coding_step(step, outputs=outputs)
     elif tool_type == "text_vlm":
-        evidence = _run_text_vlm_step(step, provider=provider, outputs=outputs)
+        evidence = _run_text_vlm_step(step, provider=provider, outputs=outputs, stream_callback=stream_callback)
     elif tool_type == "vlm":
         if image_payload is None:
             raise ValueError("Executor needs an image to run VLM evidence steps.")
-        evidence = _run_vlm_step(step, provider=provider, image_payload=image_payload, outputs=outputs)
+        evidence = _run_vlm_step(
+            step,
+            provider=provider,
+            image_payload=image_payload,
+            outputs=outputs,
+            stream_callback=stream_callback,
+        )
     else:
         raise ValueError(f"Unsupported executor tool type: {tool_type or 'unknown'}")
 
@@ -732,13 +808,14 @@ def run_executor_case(
     image_payloads: list[dict[str, Any]] | None = None,
     plan_bundle: dict[str, Any] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    stream_callback: StreamCallback | None = None,
 ) -> EngineResult:
     del profile
     provider = _resolve_executor_provider(settings)
     safe_images = _safe_image_payloads(image_payloads)
     primary_image = safe_images[0] if safe_images else None
     try:
-        vision_probe = _request_vision_probe(provider, primary_image) if primary_image is not None else None
+        vision_probe = _request_vision_probe(provider, primary_image, stream_callback) if primary_image is not None else None
     except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
         provider_label = " / ".join(item for item in [provider.provider_name, provider.model_name] if item) or "未配置接口"
         raise ValueError(
@@ -788,6 +865,7 @@ def run_executor_case(
                 provider=provider,
                 image_payload=primary_image,
                 outputs=outputs,
+                stream_callback=stream_callback,
             )
         except Exception as exc:
             _emit_progress(
@@ -826,15 +904,17 @@ def run_executor_case(
             "plan_display_steps": plan["display_steps"],
         },
     )
+    display_quality_warnings: list[str] = []
     try:
-        display_records = compose_execution_display(
+        display_records, display_quality_warnings = compose_execution_display_projection(
             provider=provider,
             submission=submission,
             plan_steps=plan["steps"],
             records=records,
+            stream_callback=stream_callback,
         )
     except (ValueError, OSError, urllib_error.URLError, urllib_error.HTTPError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Executor display composition failed: {exc}") from exc
+        raise ValueError(f"Executor display structure composition failed: {exc}") from exc
     display_by_id = {int(item["step_id"]): item for item in display_records}
     for record in records:
         step_id = int(record["step_id"])
@@ -896,4 +976,5 @@ def run_executor_case(
         plan_steps=plan["steps"],
         plan_display_steps=plan["display_steps"],
         execution_records=records,
+        display_quality_warnings=display_quality_warnings,
     )
