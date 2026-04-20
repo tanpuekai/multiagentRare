@@ -511,4 +511,5 @@ def run_report_case(
         execution_records=list((execution_bundle or {}).get("records") or []),
         raw_model_text=raw,
         raw_provider_payload=json.dumps(report, ensure_ascii=False),
+        workflow_revision=str((decision_bundle or {}).get("workflow_revision") or (execution_bundle or {}).get("workflow_revision") or "").strip(),
     )

@@ -131,6 +131,8 @@ class EngineResult:
     raw_model_text: str = ""
     raw_provider_request: str = ""
     raw_provider_payload: str = ""
+    display_payload: str = ""
+    workflow_revision: str = ""
     display_quality_warnings: list[str] = field(default_factory=list)
 
 
@@ -187,6 +189,7 @@ class CaseFeedback:
     report_rating: int
     evidence_ratings: list[EvidenceFeedback] = field(default_factory=list)
     comment: str = ""
+    workflow_revision: str = ""
 
 
 @dataclass
