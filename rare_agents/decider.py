@@ -16,6 +16,14 @@ from rare_agents.provider_client import StreamCallback, request_chat_completion_
 
 DECIDER_AGENT_NAME = "Decider"
 DECIDER_TRIGGER_PATTERN = re.compile(r"@decider\b", re.IGNORECASE)
+DECISION_STATUS_ZH = {
+    "supported": "支持当前判断",
+    "uncertain": "不确定",
+    "insufficient_evidence": "证据不足",
+}
+WEIGHT_ZH_BY_EN = {"high": "高", "medium": "中", "low": "低"}
+DISPLAY_STATUS_ZH_VALUES = set(DECISION_STATUS_ZH.values())
+DISPLAY_WEIGHT_ZH_VALUES = set(WEIGHT_ZH_BY_EN.values())
 
 
 def is_decider_invocation(text: str) -> bool:
@@ -236,7 +244,7 @@ def _decider_prompt(submission: CaseSubmission, profile: AppProfile, execution_b
         Available evidence IDs:
         {json.dumps(available_evidence_ids, ensure_ascii=False)}
 
-        Return ONLY JSON with this exact object shape:
+        Return ONLY JSON with this exact top-level object shape:
         {{
           "diagnostic_impression": "",
           "diagnosis_confidence": 0.0,
@@ -250,10 +258,26 @@ def _decider_prompt(submission: CaseSubmission, profile: AppProfile, execution_b
           "evidence_gaps": [""],
           "recommended_next_steps": [""],
           "safety_flags": [""],
-          "human_review_points": [""]
+          "human_review_points": [""],
+          "display_zh": {{
+            "decision_status_zh": "支持当前判断|不确定|证据不足",
+            "diagnostic_impression_zh": "",
+            "key_evidence": [
+              {{"evidence_id": "E1", "supports_zh": "", "quote_zh": "", "weight_zh": "高|中|低"}}
+            ],
+            "differential_diagnoses": [
+              {{"name_zh": "", "likelihood_zh": "高|中|低", "supporting_evidence_ids": ["E1"], "refuting_evidence_ids": ["E2"], "comment_zh": ""}}
+            ],
+            "evidence_gaps_zh": [""],
+            "recommended_next_steps_zh": [""],
+            "safety_flags_zh": [""],
+            "human_review_points_zh": [""]
+          }}
         }}
 
         Rules:
+        - All top-level machine fields except display_zh must be in English for downstream agent execution.
+        - display_zh must be concise Simplified Chinese for clinician-facing UI, while preserving the same evidence IDs and clinical meaning.
         - Every diagnostic claim must cite one or more Executor evidence_id values from the available evidence ID list.
         - If evidence is not sufficient, set decision_status to "insufficient_evidence" and lower diagnosis_confidence.
         - Do not cite plan steps as evidence unless an Executor record completed that step.
@@ -382,22 +406,166 @@ def _validate_decision(payload: Any, *, valid_evidence_ids: set[str]) -> dict[st
     }
 
 
-def _decision_markdown(decision: dict[str, Any]) -> str:
+def _validate_decision_display(payload: Any, *, valid_evidence_ids: set[str], decision: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Decider output is missing display_zh.")
+    status_zh = str(payload.get("decision_status_zh") or "").strip()
+    if status_zh not in DISPLAY_STATUS_ZH_VALUES:
+        raise ValueError("Decider output field display_zh.decision_status_zh is invalid.")
+    expected_status_zh = DECISION_STATUS_ZH.get(str(decision.get("decision_status") or "").strip())
+    if expected_status_zh and status_zh != expected_status_zh:
+        raise ValueError("Decider output field display_zh.decision_status_zh must match machine decision_status.")
+    diagnostic_impression_zh = str(payload.get("diagnostic_impression_zh") or "").strip()
+    if not diagnostic_impression_zh:
+        raise ValueError("Decider output field display_zh.diagnostic_impression_zh is required.")
+    key_evidence = payload.get("key_evidence")
+    if not isinstance(key_evidence, list) or not key_evidence:
+        raise ValueError("Decider output field display_zh.key_evidence must be a non-empty list.")
+    cleaned_key_evidence: list[dict[str, Any]] = []
+    for index, item in enumerate(key_evidence, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Decider display_zh.key_evidence item #{index} must be an object.")
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        if evidence_id not in valid_evidence_ids:
+            raise ValueError(f"Decider display_zh.key_evidence item #{index} cites unknown evidence id: {evidence_id or 'empty'}")
+        supports_zh = str(item.get("supports_zh") or "").strip()
+        quote_zh = str(item.get("quote_zh") or "").strip()
+        if not supports_zh and not quote_zh:
+            raise ValueError(f"Decider display_zh.key_evidence item #{index} must include supports_zh or quote_zh.")
+        weight_zh = str(item.get("weight_zh") or "").strip()
+        if weight_zh not in DISPLAY_WEIGHT_ZH_VALUES:
+            raise ValueError(f"Decider display_zh.key_evidence item #{index} has invalid weight_zh.")
+        cleaned_key_evidence.append(
+            {
+                "evidence_id": evidence_id,
+                "supports_zh": supports_zh,
+                "quote_zh": quote_zh,
+                "weight_zh": weight_zh,
+            }
+        )
+    expected_key_ids = {str(item.get("evidence_id") or "").strip() for item in decision.get("key_evidence", []) if str(item.get("evidence_id") or "").strip()}
+    actual_key_ids = {item["evidence_id"] for item in cleaned_key_evidence}
+    if expected_key_ids != actual_key_ids:
+        raise ValueError("Decider output field display_zh.key_evidence must cover every machine-decision evidence_id exactly once.")
+    machine_key_by_id = {
+        str(item.get("evidence_id") or "").strip(): item
+        for item in decision.get("key_evidence", [])
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+    for item in cleaned_key_evidence:
+        machine_item = machine_key_by_id.get(item["evidence_id"], {})
+        expected_weight_zh = WEIGHT_ZH_BY_EN.get(str(machine_item.get("weight") or "").strip().lower())
+        if expected_weight_zh and item["weight_zh"] != expected_weight_zh:
+            raise ValueError(f"Decider output field display_zh.key_evidence for {item['evidence_id']} must match machine weight.")
+    differentials = payload.get("differential_diagnoses")
+    if not isinstance(differentials, list):
+        raise ValueError("Decider output field display_zh.differential_diagnoses must be a list.")
+    cleaned_differentials: list[dict[str, Any]] = []
+    for index, item in enumerate(differentials, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Decider display_zh.differential_diagnoses item #{index} must be an object.")
+        name_zh = str(item.get("name_zh") or "").strip()
+        if not name_zh:
+            raise ValueError(f"Decider display_zh.differential_diagnoses item #{index} is missing name_zh.")
+        likelihood_zh = str(item.get("likelihood_zh") or "").strip()
+        if likelihood_zh not in DISPLAY_WEIGHT_ZH_VALUES:
+            raise ValueError(f"Decider display_zh.differential_diagnoses item #{index} has invalid likelihood_zh.")
+        supporting_ids = _normalize_evidence_id_list(
+            item.get("supporting_evidence_ids"),
+            valid_ids=valid_evidence_ids,
+            field=f"display_zh.differential_diagnoses[{index}].supporting_evidence_ids",
+            allow_empty=True,
+        )
+        refuting_ids = _normalize_evidence_id_list(
+            item.get("refuting_evidence_ids"),
+            valid_ids=valid_evidence_ids,
+            field=f"display_zh.differential_diagnoses[{index}].refuting_evidence_ids",
+            allow_empty=True,
+        )
+        if not supporting_ids and not refuting_ids:
+            raise ValueError(f"Decider display_zh.differential_diagnoses item #{index} must cite supporting or refuting evidence.")
+        cleaned_differentials.append(
+            {
+                "name_zh": name_zh,
+                "likelihood_zh": likelihood_zh,
+                "supporting_evidence_ids": supporting_ids,
+                "refuting_evidence_ids": refuting_ids,
+                "comment_zh": str(item.get("comment_zh") or "").strip(),
+            }
+        )
+    if len(cleaned_differentials) != len(decision.get("differential_diagnoses", [])):
+        raise ValueError("Decider output field display_zh.differential_diagnoses must align one-to-one with machine differential_diagnoses.")
+    for index, item in enumerate(cleaned_differentials):
+        machine_item = decision.get("differential_diagnoses", [])[index] if index < len(decision.get("differential_diagnoses", [])) else {}
+        expected_likelihood_zh = WEIGHT_ZH_BY_EN.get(str(machine_item.get("likelihood") or "").strip().lower())
+        if expected_likelihood_zh and item["likelihood_zh"] != expected_likelihood_zh:
+            raise ValueError(f"Decider output field display_zh.differential_diagnoses[{index + 1}].likelihood_zh must match machine likelihood.")
+        if item["supporting_evidence_ids"] != list(machine_item.get("supporting_evidence_ids") or []):
+            raise ValueError(f"Decider output field display_zh.differential_diagnoses[{index + 1}].supporting_evidence_ids must match machine supporting_evidence_ids.")
+        if item["refuting_evidence_ids"] != list(machine_item.get("refuting_evidence_ids") or []):
+            raise ValueError(f"Decider output field display_zh.differential_diagnoses[{index + 1}].refuting_evidence_ids must match machine refuting_evidence_ids.")
+    evidence_gaps_zh = _string_list(payload.get("evidence_gaps_zh"))
+    recommended_next_steps_zh = _string_list(payload.get("recommended_next_steps_zh"))
+    safety_flags_zh = _string_list(payload.get("safety_flags_zh"))
+    human_review_points_zh = _string_list(payload.get("human_review_points_zh"))
+    if len(evidence_gaps_zh) != len(decision.get("evidence_gaps", [])):
+        raise ValueError("Decider output field display_zh.evidence_gaps_zh must align with machine evidence_gaps.")
+    if len(recommended_next_steps_zh) != len(decision.get("recommended_next_steps", [])):
+        raise ValueError("Decider output field display_zh.recommended_next_steps_zh must align with machine recommended_next_steps.")
+    if len(safety_flags_zh) != len(decision.get("safety_flags", [])):
+        raise ValueError("Decider output field display_zh.safety_flags_zh must align with machine safety_flags.")
+    if len(human_review_points_zh) != len(decision.get("human_review_points", [])):
+        raise ValueError("Decider output field display_zh.human_review_points_zh must align with machine human_review_points.")
+    return {
+        "decision_status_zh": status_zh,
+        "diagnostic_impression_zh": diagnostic_impression_zh,
+        "key_evidence": cleaned_key_evidence,
+        "differential_diagnoses": cleaned_differentials,
+        "evidence_gaps_zh": evidence_gaps_zh,
+        "recommended_next_steps_zh": recommended_next_steps_zh,
+        "safety_flags_zh": safety_flags_zh,
+        "human_review_points_zh": human_review_points_zh,
+    }
+
+
+def _decision_markdown(decision: dict[str, Any], display: dict[str, Any] | None = None) -> str:
+    display = display or {}
+    display_key_evidence = display.get("key_evidence") if isinstance(display.get("key_evidence"), list) else []
+    display_key_by_id = {
+        str(item.get("evidence_id") or "").strip(): item
+        for item in display_key_evidence
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    }
+    display_differentials = display.get("differential_diagnoses") if isinstance(display.get("differential_diagnoses"), list) else []
     evidence_lines = "\n".join(
-        f"- [{item.get('evidence_id')}] {item.get('supports') or item.get('quote') or ''}（权重：{item.get('weight', 'medium')}）"
+        (
+            lambda display_item, item=item: (
+                f"- [{item.get('evidence_id')}] "
+                f"{display_item.get('supports_zh') or display_item.get('quote_zh') or item.get('supports') or item.get('quote') or ''}"
+                f"（权重：{display_item.get('weight_zh') or item.get('weight', 'medium')}）"
+            )
+        )(display_key_by_id.get(str(item.get("evidence_id") or "").strip(), {}))
         for item in decision.get("key_evidence", [])
     )
     differential_lines = "\n".join(
-        f"- {item.get('name', '')}：{item.get('likelihood', '')}；支持 {', '.join(item.get('supporting_evidence_ids') or []) or '无'}；反证 {', '.join(item.get('refuting_evidence_ids') or []) or '无'}。{item.get('comment', '')}"
-        for item in decision.get("differential_diagnoses", [])
+        (
+            lambda display_item, item=item: (
+                f"- {display_item.get('name_zh') or item.get('name', '')}"
+                f"：{display_item.get('likelihood_zh') or item.get('likelihood', '')}"
+                f"；支持 {', '.join(item.get('supporting_evidence_ids') or []) or '无'}"
+                f"；反证 {', '.join(item.get('refuting_evidence_ids') or []) or '无'}。"
+                f"{display_item.get('comment_zh') or item.get('comment', '')}"
+            )
+        )(display_differentials[index] if index < len(display_differentials) and isinstance(display_differentials[index], dict) else {})
+        for index, item in enumerate(decision.get("differential_diagnoses", []))
     )
-    gaps = "\n".join(f"- {item}" for item in decision.get("evidence_gaps", [])) or "- 未列出"
-    next_steps = "\n".join(f"- {item}" for item in decision.get("recommended_next_steps", [])) or "- 未列出"
-    review = "\n".join(f"- {item}" for item in decision.get("human_review_points", [])) or "- 请医生复核关键证据与诊断结论"
+    gaps = "\n".join(f"- {item}" for item in display.get("evidence_gaps_zh", [])) or "- 未列出"
+    next_steps = "\n".join(f"- {item}" for item in display.get("recommended_next_steps_zh", [])) or "- 未列出"
+    review = "\n".join(f"- {item}" for item in display.get("human_review_points_zh", [])) or "- 请医生复核关键证据与诊断结论"
     return dedent(
         f"""
         **诊断判断**
-        {decision['diagnostic_impression']}
+        {display.get('diagnostic_impression_zh') or decision['diagnostic_impression']}
 
         **证据依据**
         {evidence_lines}
@@ -440,18 +608,38 @@ def run_decider_case(
         max_tokens=3200,
         stream_callback=stream_callback,
     )
-    decision = _validate_decision(_parse_json_text(raw), valid_evidence_ids=valid_evidence_ids)
+    payload = _parse_json_text(raw)
+    decision = _validate_decision(payload, valid_evidence_ids=valid_evidence_ids)
+    decision_display = _validate_decision_display(payload.get("display_zh"), valid_evidence_ids=valid_evidence_ids, decision=decision)
     confidence = float(decision["diagnosis_confidence"])
+    display_key_by_id = {
+        str(item.get("evidence_id") or "").strip(): item
+        for item in decision_display["key_evidence"]
+        if isinstance(item, dict)
+    }
     return EngineResult(
         title=f"Decider 诊断判断：{submission.chief_complaint or '当前病例'}",
-        executive_summary=f"@Decider 已基于 {len((execution_bundle or {}).get('records') or [])} 条执行证据形成诊断判断，状态：{decision['decision_status']}。",
+        executive_summary=(
+            f"@Decider 已基于 {len((execution_bundle or {}).get('records') or [])} 条执行证据形成诊断判断，"
+            f"状态：{decision_display['decision_status_zh']}。"
+        ),
         department=submission.department,
         output_style=submission.output_style,
-        professional_answer=_decision_markdown(decision),
+        professional_answer=_decision_markdown(decision, decision_display),
         coding_table=[],
         cost_table=[],
-        references=[{"type": "executor_evidence", "title": item.get("evidence_id", ""), "region": item.get("supports", "")} for item in decision["key_evidence"]],
-        next_steps=decision["recommended_next_steps"],
+        references=[
+            {
+                "type": "executor_evidence",
+                "title": item.get("evidence_id", ""),
+                "region": (
+                    (display_key_by_id.get(str(item.get("evidence_id") or "").strip(), {}) or {}).get("supports_zh")
+                    or item.get("supports", "")
+                ),
+            }
+            for item in decision["key_evidence"]
+        ],
+        next_steps=decision_display["recommended_next_steps_zh"] or decision["recommended_next_steps"],
         safety_note="该输出是证据融合判断，必须由医生复核后进入正式诊疗记录。",
         rounds=[
             {
@@ -479,4 +667,6 @@ def run_decider_case(
         execution_records=list((execution_bundle or {}).get("records") or []),
         raw_model_text=raw,
         raw_provider_payload=json.dumps(decision, ensure_ascii=False),
+        display_payload=json.dumps(decision_display, ensure_ascii=False),
+        workflow_revision=str((execution_bundle or {}).get("workflow_revision") or "").strip(),
     )

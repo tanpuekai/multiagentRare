@@ -29,6 +29,7 @@ from rare_agents.service import (
     save_profile,
     save_settings,
     serialize_session,
+    set_active_workspace_session,
     settings_from_payload,
     submit_case,
     submit_case_feedback,
@@ -107,6 +108,16 @@ def session_detail(session_id: str, request: Request) -> dict:
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"session": serialize_session(session)}
+
+
+@app.post("/api/workspace/active")
+async def update_active_workspace(request: Request) -> dict:
+    user = require_user(request)
+    payload = await request.json()
+    try:
+        return set_active_workspace_session(user["username"], str(payload.get("session_id", "")).strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/intake/prefill")

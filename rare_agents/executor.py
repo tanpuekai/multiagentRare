@@ -831,6 +831,7 @@ def run_executor_case(
         "provider": str(plan_bundle.get("provider") or ""),
         "model": str(plan_bundle.get("model") or ""),
         "note": str(plan_bundle.get("note") or "Loaded the existing planner-generated execution plan from context."),
+        "workflow_revision": str(plan_bundle.get("workflow_revision") or "").strip(),
     }
     if not plan["steps"]:
         raise ValueError("Executor did not find executable plan steps in the current context. Invoke @Planner first.")
@@ -976,5 +977,6 @@ def run_executor_case(
         plan_steps=plan["steps"],
         plan_display_steps=plan["display_steps"],
         execution_records=records,
+        workflow_revision=plan["workflow_revision"],
         display_quality_warnings=display_quality_warnings,
     )

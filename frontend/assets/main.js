@@ -355,7 +355,7 @@
     if (session?.submission && session?.result) {
       return [
         {
-          turn_id: `fallback-${session.timestamp}-${session.result.execution_mode || "result"}`,
+          turn_id: `legacy-${session.timestamp}-${session.result.execution_mode || "result"}`,
           timestamp: session.timestamp,
           user_input: session.submission.case_summary,
           submission: session.submission,
@@ -372,13 +372,12 @@
 
   function autoFinalTurnForSession(session) {
     const turns = buildTurnList(session);
-    if (!turns.some(isAutoTurn)) {
+    const latestTurn = turns[turns.length - 1];
+    if (!isAutoTurn(latestTurn)) {
       return null;
     }
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (turns[index]?.result?.execution_mode === "report") {
-        return turns[index];
-      }
+    if (latestTurn?.result?.execution_mode === "report") {
+      return latestTurn;
     }
     return null;
   }
@@ -389,7 +388,7 @@
     if (autoFinalTurn) {
       return [autoFinalTurn];
     }
-    return turns;
+    return turns.filter((turn) => !isAutoTurn(turn) || turn?.result?.execution_mode === "report");
   }
 
   function latestApprovalForTurn(session, turnId) {
@@ -398,22 +397,302 @@
     return matched.length ? matched[matched.length - 1] : null;
   }
 
-  function latestExecutorTurn(session) {
+  function workflowRevisionValue(result) {
+    return String(result?.workflow_revision || "").trim();
+  }
+
+  function workflowEntriesForSession(session) {
     const turns = buildTurnList(session);
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (turns[index]?.result?.execution_mode === "executor") {
-        return turns[index];
+    const entries = [];
+    let currentRevision = "";
+    turns.forEach((turn, index) => {
+      const mode = String(turn?.result?.execution_mode || "").trim();
+      const explicitRevision = workflowRevisionValue(turn?.result);
+      let revision = "";
+      if (mode === "planner") {
+        revision = explicitRevision || String(turn?.turn_id || `planner-${index + 1}`).trim();
+        currentRevision = revision;
+      } else {
+        revision = explicitRevision || currentRevision;
+        if (explicitRevision) {
+          currentRevision = explicitRevision;
+        }
       }
+      entries.push({ turn, revision });
+    });
+    return entries;
+  }
+
+  function currentWorkflowRevision(session) {
+    const entries = workflowEntriesForSession(session);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (entries[index]?.turn?.result?.execution_mode === "planner" && entries[index]?.revision) {
+        return entries[index].revision;
+      }
+    }
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (entries[index]?.revision) {
+        return entries[index].revision;
+      }
+    }
+    return "";
+  }
+
+  function workflowEntryForTurn(session, turn) {
+    if (!turn) {
+      return null;
+    }
+    const turnId = String(turn.turn_id || "");
+    return workflowEntriesForSession(session).find((entry) => String(entry?.turn?.turn_id || "") === turnId) || null;
+  }
+
+  function turnWorkflowRevision(session, turn) {
+    return workflowEntryForTurn(session, turn)?.revision || workflowRevisionValue(turn?.result);
+  }
+
+  function latestTurnByMode(session, mode, options = {}) {
+    const { currentOnly = false, workflowRevision = null } = options;
+    const entries = workflowEntriesForSession(session);
+    const targetRevision = workflowRevision === null
+      ? (currentOnly ? currentWorkflowRevision(session) : "")
+      : String(workflowRevision || "").trim();
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.turn?.result?.execution_mode !== mode) {
+        continue;
+      }
+      if ((currentOnly || workflowRevision !== null) && targetRevision && entry.revision !== targetRevision) {
+        continue;
+      }
+      return entry.turn;
     }
     return null;
   }
 
-  function hasReportTurn(session) {
-    return buildTurnList(session).some((turn) => turn?.result?.execution_mode === "report");
+  function latestExecutorTurn(session, options = {}) {
+    return latestTurnByMode(session, "executor", options);
+  }
+
+  function hasReportTurn(session, options = {}) {
+    return Boolean(latestTurnByMode(session, "report", options));
+  }
+
+  function isTurnStale(session, turn) {
+    if (!turn) {
+      return false;
+    }
+    const activeRevision = currentWorkflowRevision(session);
+    const turnRevision = turnWorkflowRevision(session, turn);
+    return Boolean(activeRevision && turnRevision && turnRevision !== activeRevision);
+  }
+
+  function currentCaseFeedback(session) {
+    const feedback = session?.case_feedback || null;
+    if (!feedback) {
+      return null;
+    }
+    const activeRevision = currentWorkflowRevision(session);
+    if (!activeRevision) {
+      return feedback;
+    }
+    const explicitRevision = String(feedback.workflow_revision || "").trim();
+    if (explicitRevision) {
+      return explicitRevision === activeRevision ? feedback : null;
+    }
+    const latestReport = latestTurnByMode(session, "report");
+    if (!latestReport) {
+      return null;
+    }
+    return turnWorkflowRevision(session, latestReport) === activeRevision ? feedback : null;
+  }
+
+  function approvalStatusForTurn(session, turn) {
+    if (!turn?.turn_id) {
+      return "none";
+    }
+    const approval = latestApprovalForTurn(session, turn.turn_id);
+    if (approval?.action === "approved") {
+      return "approved";
+    }
+    if (approval?.action === "revision_requested") {
+      return "needs_revision";
+    }
+    return "needs_review";
+  }
+
+  function clinicalWorkflowStages(session) {
+    const activeRevision = currentWorkflowRevision(session);
+    const definitions = [
+      { mode: "planner", label: "Planner", copy: "制定可执行计划" },
+      { mode: "executor", label: "Executor", copy: "采集可复核证据" },
+      { mode: "decider", label: "Decider", copy: "形成证据化判断" },
+      { mode: "report", label: "Report", copy: "交付报告 artifact" },
+    ];
+    return definitions.map((stage) => {
+      const turn = latestTurnByMode(session, stage.mode, { currentOnly: true, workflowRevision: activeRevision });
+      const latestHistoricalTurn = latestTurnByMode(session, stage.mode);
+      if (!turn) {
+        if (latestHistoricalTurn && activeRevision && turnWorkflowRevision(session, latestHistoricalTurn) !== activeRevision) {
+          return { ...stage, turn: null, staleTurn: latestHistoricalTurn, approval: null, status: "stale" };
+        }
+        return { ...stage, turn: null, staleTurn: null, approval: null, status: "pending" };
+      }
+      const approval = latestApprovalForTurn(session, turn.turn_id);
+      let status = approvalStatusForTurn(session, turn);
+      if (stage.mode === "report" && currentCaseFeedback(session)) {
+        status = "accepted";
+      }
+      return { ...stage, turn, staleTurn: null, approval, status };
+    });
+  }
+
+  function workflowStageText(status) {
+    if (status === "accepted") {
+      return "已评分";
+    }
+    if (status === "stale") {
+      return "已失效";
+    }
+    if (status === "approved") {
+      return "已审批";
+    }
+    if (status === "needs_revision") {
+      return "需修改";
+    }
+    if (status === "needs_review") {
+      return "待复核";
+    }
+    return "待执行";
+  }
+
+  function knownEvidenceIdsFromRecords(records) {
+    return (Array.isArray(records) ? records : [])
+      .map((record, index) => numericStepId(record?.step_id, index + 1))
+      .filter(Boolean)
+      .map((stepId) => `E${stepId}`);
+  }
+
+  function collectEvidenceIds(value, targetSet) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectEvidenceIds(item, targetSet));
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.entries(value).forEach(([key, item]) => {
+        if (/evidence_ids?$|supporting_evidence_ids|refuting_evidence_ids/i.test(key)) {
+          collectEvidenceIds(item, targetSet);
+        } else if (typeof item === "object") {
+          collectEvidenceIds(item, targetSet);
+        }
+      });
+      return;
+    }
+    const text = String(value || "").trim();
+    if (/^E\d+$/i.test(text)) {
+      targetSet.add(text.toUpperCase());
+    }
+  }
+
+  function clinicalEvidenceStats(session) {
+    const executorTurn = latestExecutorTurn(session, { currentOnly: true });
+    const records = executorTurn?.result?.execution_records || [];
+    const evidenceIds = knownEvidenceIdsFromRecords(records);
+    const grounded = records.filter(hasGroundingEvidence).length;
+    const cited = new Set();
+    const deciderTurn = latestTurnByMode(session, "decider", { currentOnly: true });
+    const reportTurn = latestTurnByMode(session, "report", { currentOnly: true });
+    collectEvidenceIds(parseObjectJson(deciderTurn?.result?.raw_provider_payload), cited);
+    collectEvidenceIds(parseObjectJson(reportTurn?.result?.raw_provider_payload), cited);
+    const citedKnown = evidenceIds.filter((item) => cited.has(item));
+    return {
+      total: evidenceIds.length,
+      grounded,
+      cited: citedKnown.length,
+      uncited: Math.max(0, evidenceIds.length - citedKnown.length),
+    };
+  }
+
+  function nextClinicalAction(session) {
+    const stages = clinicalWorkflowStages(session);
+    const planner = stages.find((item) => item.mode === "planner");
+    const executor = stages.find((item) => item.mode === "executor");
+    const decider = stages.find((item) => item.mode === "decider");
+    const report = stages.find((item) => item.mode === "report");
+    if (!planner?.turn) {
+      return "调用 @Planner，为当前病例生成可执行诊断计划。";
+    }
+    if (planner.status === "needs_review") {
+      return "复核 Planner 计划，逐步通过或写清楚需要 steer 的位置。";
+    }
+    if (planner.status === "needs_revision") {
+      return "Planner 计划已有修改意见，请根据 steer 重新生成或调整计划。";
+    }
+    if (executor?.status === "stale") {
+      return "检测到旧版 Executor 证据已被新的 Planner 计划置为失效，请重新调用 @Executor。";
+    }
+    if (!executor?.turn) {
+      return "调用 @Executor，按已审批计划采集图像和文本证据。";
+    }
+    if (executor.status === "needs_review") {
+      return "复核 Executor 证据，重点检查 ROI、结论和置信度是否可接受。";
+    }
+    if (executor.status === "needs_revision") {
+      return "Executor 证据被要求修改，请重跑问题步骤或补充 steer。";
+    }
+    if (decider?.status === "stale") {
+      return "检测到旧版 Decider 判断已失效，请基于当前证据重新调用 @Decider。";
+    }
+    if (!decider?.turn) {
+      return "调用 @Decider，只基于 Evidence Ledger 做诊断判断。";
+    }
+    if (decider.status === "needs_review") {
+      return "审批 Decider 判断，确认诊断、鉴别诊断和缺失信息是否合理。";
+    }
+    if (decider.status === "needs_revision") {
+      return "Decider 判断需要修改，请基于证据意见重新融合。";
+    }
+    if (report?.status === "stale") {
+      return "检测到旧版报告已失效，请基于当前判断重新调用 @Report。";
+    }
+    if (!report?.turn) {
+      return "调用 @Report，将 Decider 判断转换为带证据引用的报告 artifact。";
+    }
+    if (report.status === "needs_review") {
+      return "审批最终报告，并确认所有关键陈述都能回到证据。";
+    }
+    if (!currentCaseFeedback(session)) {
+      return "完成病例评分，为证据、诊断和报告留下质量数据。";
+    }
+    return "病例闭环已完成，可继续随访、导出或开始新病例。";
+  }
+
+  function latestCaseTask(session) {
+    const turns = buildTurnList(session);
+    const latest = turns[turns.length - 1];
+    return String(latest?.user_input || session?.submission?.chief_complaint || session?.submission?.case_summary || "").trim();
+  }
+
+  function caseContextAlerts(submission) {
+    const alerts = [];
+    const assets = imageAssetsFromSubmission(submission);
+    const textPresent = Boolean(String(submission?.case_summary || submission?.chief_complaint || "").trim());
+    if (!textPresent) {
+      alerts.push("未提供文本目标，系统将以图像内容作为主要规划依据。");
+    }
+    if (!assets.length) {
+      alerts.push("当前病例没有可视图像证据。");
+    }
+    if (!String(submission?.patient_age || "").trim()) {
+      alerts.push("年龄未填写。");
+    }
+    if (!String(submission?.patient_sex || "").trim()) {
+      alerts.push("性别未填写。");
+    }
+    return alerts;
   }
 
   function evidenceFeedbackRows(session) {
-    const executorTurn = latestExecutorTurn(session);
+    const executorTurn = latestExecutorTurn(session, { currentOnly: true });
     const records = executorTurn?.result?.execution_records || [];
     return records
       .map((record, index) => {
@@ -1346,7 +1625,7 @@
 
   function CaseFeedbackPanel({ session, onSubmit, autoFinal = false }) {
     const rows = evidenceFeedbackRows(session);
-    const existing = session?.case_feedback || null;
+    const existing = currentCaseFeedback(session);
     const [open, setOpen] = useState(Boolean(autoFinal));
     const [diagnosisRating, setDiagnosisRating] = useState(existing?.diagnosis_rating || 0);
     const [reportRating, setReportRating] = useState(existing?.report_rating || 0);
@@ -1382,7 +1661,7 @@
       }
     }
 
-    if (!rows.length || !hasReportTurn(session)) {
+    if (!rows.length || !hasReportTurn(session, { currentOnly: true })) {
       return null;
     }
 
@@ -2090,20 +2369,201 @@
     `;
   }
 
-  function ContextPanel({ submission, meta, compact = false }) {
+  function WorkflowOverview({ session, compact = false }) {
+    const stages = clinicalWorkflowStages(session);
+    return html`
+      <div className=${cx("result-card", "workflow-overview-card", compact && "is-compact")}>
+        <div className="workflow-overview-head">
+          <div>
+            <div className="panel-title">工作流</div>
+            ${compact ? null : html`<div className="workflow-overview-copy">每个阶段都有明确产物、审批状态和下一步动作。</div>`}
+          </div>
+          <span className="badge">${buildTurnList(session).length} 次操作</span>
+        </div>
+        <div className="workflow-stage-row">
+          ${stages.map((stage, index) => {
+            const status = stage.status;
+            return html`
+              <div key=${stage.mode} className=${cx("workflow-stage", `is-${String(status).replace(/_/g, "-")}`)}>
+                <span className="workflow-stage-dot"></span>
+                <span>
+                  <strong>${stage.label}</strong>
+                  <em>${workflowStageText(status)} · ${status === "stale" ? "旧版结果已被当前计划替换" : stage.copy}</em>
+                </span>
+                ${index < stages.length - 1 ? html`<span className="workflow-stage-line"></span>` : null}
+              </div>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
+  function RuntimeReviewQueue({ session }) {
+    const stages = clinicalWorkflowStages(session);
+    const reviewRows = stages.map((stage) => ({
+      label: stage.label,
+      status: workflowStageText(stage.status),
+      note:
+        stage.status === "pending"
+          ? "尚未产出"
+          : stage.status === "stale"
+            ? "旧版结果已失效"
+          : stage.status === "needs_review"
+            ? "等待医生复核"
+            : stage.status === "needs_revision"
+              ? "已有修改要求"
+            : stage.status === "accepted"
+              ? "已评分闭环"
+              : "已通过",
+    }));
+    return html`
+      <div className="runtime-section-card">
+        <div className="runtime-section-head">
+          <div className="panel-title">复核队列</div>
+        </div>
+        <div className="clinical-review-queue runtime-review-queue">
+          ${reviewRows.map((row) => html`
+            <div key=${row.label} className="clinical-review-item">
+              <span>${row.label}</span>
+              <strong>${row.status}</strong>
+              <em>${row.note}</em>
+            </div>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
+  function CaseRuntimePanel({ session, meta, contextSubmission }) {
+    if (!session || !contextSubmission) {
+      return null;
+    }
+    const stats = clinicalEvidenceStats(session);
+    const feedback = currentCaseFeedback(session);
+    return html`
+      <div className="case-runtime-panel" aria-label="病例工作台">
+        <div className="result-card case-runtime-card">
+          <div className="case-runtime-head">
+            <div>
+              <div className="result-title">病例工作台</div>
+            </div>
+            <span className="badge">Live Case</span>
+          </div>
+          <div className="clinical-next-action">
+            <span>下一步</span>
+            <strong>${nextClinicalAction(session)}</strong>
+          </div>
+          <div className="clinical-command-grid runtime-metric-grid">
+            <div className="clinical-command-metric">
+              <span>证据</span>
+              <strong>${stats.total}</strong>
+              <em>${stats.grounded} 条含图像定位</em>
+            </div>
+            <div className="clinical-command-metric">
+              <span>引用</span>
+              <strong>${stats.cited}/${stats.total || 0}</strong>
+              <em>${stats.total ? `${stats.uncited} 条未引用` : "等待证据"}</em>
+            </div>
+            <div className="clinical-command-metric">
+              <span>反馈</span>
+              <strong>${feedback ? "已保存" : "未完成"}</strong>
+              <em>${feedback ? `诊断 ${feedback.diagnosis_rating} 星` : "报告后评分"}</em>
+            </div>
+          </div>
+        </div>
+
+        <${ContextPanel} submission=${contextSubmission} meta=${meta} compact=${true} session=${session} />
+        <${WorkflowOverview} session=${session} compact=${true} />
+        <${EvidenceLedger} session=${session} contextSubmission=${contextSubmission} compact=${true} />
+        <${RuntimeReviewQueue} session=${session} />
+      </div>
+    `;
+  }
+
+  function ClinicalCommandCenter({ session }) {
+    const stages = clinicalWorkflowStages(session);
+    const stats = clinicalEvidenceStats(session);
+    const feedback = currentCaseFeedback(session);
+    const reviewRows = stages.map((stage) => ({
+      label: stage.label,
+      status: workflowStageText(stage.status),
+      note:
+        stage.status === "pending"
+          ? "尚未产出"
+          : stage.status === "stale"
+            ? "旧版结果已失效"
+          : stage.status === "needs_review"
+            ? "等待医生复核"
+            : stage.status === "needs_revision"
+              ? "已有修改要求"
+              : stage.status === "accepted"
+                ? "已评分闭环"
+                : "已通过",
+    }));
+    return html`
+      <div className="result-card clinical-command-card">
+        <div className="clinical-command-head">
+          <div>
+            <div className="result-title">临床控制台</div>
+            <div className="result-summary">把病例当作一个持续工作区：计划、证据、判断、报告和医生反馈都在这里形成闭环。</div>
+          </div>
+          <span className="badge">Case Workspace</span>
+        </div>
+
+        <div className="clinical-next-action">
+          <span>下一步</span>
+          <strong>${nextClinicalAction(session)}</strong>
+        </div>
+
+        <div className="clinical-command-grid">
+          <div className="clinical-command-metric">
+            <span>证据</span>
+            <strong>${stats.total}</strong>
+            <em>${stats.grounded} 条含图像定位</em>
+          </div>
+          <div className="clinical-command-metric">
+            <span>引用</span>
+            <strong>${stats.cited}/${stats.total || 0}</strong>
+            <em>${stats.total ? `${stats.uncited} 条暂未被判断或报告引用` : "等待 Executor 产出证据"}</em>
+          </div>
+          <div className="clinical-command-metric">
+            <span>医生反馈</span>
+            <strong>${feedback ? "已保存" : "未完成"}</strong>
+            <em>${feedback ? `诊断 ${feedback.diagnosis_rating} 星 · 报告 ${feedback.report_rating} 星` : "报告完成后进入评分闭环"}</em>
+          </div>
+        </div>
+
+        <div className="clinical-review-queue">
+          ${reviewRows.map((row) => html`
+            <div key=${row.label} className="clinical-review-item">
+              <span>${row.label}</span>
+              <strong>${row.status}</strong>
+              <em>${row.note}</em>
+            </div>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
+  function ContextPanel({ submission, meta, compact = false, session = null }) {
     if (!submission) {
       return null;
     }
     const assets = imageAssetsFromSubmission(submission);
+    const alerts = caseContextAlerts(submission);
+    const task = latestCaseTask(session) || submission.chief_complaint || submission.case_summary || "未填写";
+    const turnCount = buildTurnList(session).length;
     return html`
-      <details className="result-card context-details" open=${!compact}>
+      <details className=${cx("result-card", "context-details", compact && "is-compact")} open=${!compact}>
         <summary className="context-summary">
           <div>
-            <div className="result-title">当前病例上下文</div>
+            <div className="result-title">Case Context</div>
             <div className="result-summary">
               ${compact
                 ? `${submission.chief_complaint || submission.case_summary || "当前病例"} · ${assets.length ? assets.map((asset) => asset.name).filter(Boolean).join("，") : "无影像附件"}`
-                : "后续的 @Planner、@Executor、@Decider 和 @Report 都会沿用这里的原始文本与图像资料。输入 /clear 可开始新的上下文。"}
+                : "当前病例的文本、图像与历史 agent 结果都会影响后续步骤。输入 /clear 开始新病例。"}
             </div>
           </div>
           <div className="badge-row">
@@ -2113,35 +2573,66 @@
           </div>
         </summary>
 
-        <div className="info-panel context-body">
-          <div className="panel-title">病例资料</div>
-          <div className="info-list">
-            ${submission.chief_complaint
-              ? html`
-                  <div className="info-list-item">
-                    <span className="badge">主诉</span>
-                    <span>${submission.chief_complaint}</span>
-                  </div>
-                `
-              : null}
-            <div className="info-list-item">
-              <span className="badge">摘要</span>
-              <span>${submission.case_summary || "未填写"}</span>
-            </div>
-            <div className="info-list-item">
-              <span className="badge">患者</span>
-              <span>${submission.patient_age || "年龄未填"} · ${label(meta, "sex", submission.patient_sex)}</span>
-            </div>
-            <div className="info-list-item">
-              <span className="badge">附件</span>
-              <span>${submission.uploaded_images?.length ? submission.uploaded_images.join("，") : "无影像附件"}${submission.uploaded_docs?.length ? `；${submission.uploaded_docs.join("，")}` : ""}</span>
+        <div className="context-inspector">
+          <div className="context-metric">
+            <span>当前任务</span>
+            <strong>${task}</strong>
+          </div>
+          <div className="context-metric">
+            <span>图像</span>
+            <strong>${assets.length}</strong>
+          </div>
+          <div className="context-metric">
+            <span>文本</span>
+            <strong>${String(submission.case_summary || submission.chief_complaint || "").trim() ? "已提供" : "未提供"}</strong>
+          </div>
+          <div className="context-metric">
+            <span>上下文</span>
+            <strong>${turnCount ? `${turnCount} 步历史` : "新病例"}</strong>
+          </div>
+        </div>
+
+        ${alerts.length
+          ? html`
+              <div className="context-alert-list">
+                ${alerts.map((item, index) => html`
+                  <div key=${index} className="context-alert">${item}</div>
+                `)}
+              </div>
+            `
+          : null}
+
+        <div className="context-detail-grid">
+          <div className="context-detail-block">
+            <div className="panel-title">病例资料</div>
+            <div className="info-list">
+              ${submission.chief_complaint
+                ? html`
+                    <div className="info-list-item">
+                      <span className="badge">主诉</span>
+                      <span>${submission.chief_complaint}</span>
+                    </div>
+                  `
+                : null}
+              <div className="info-list-item">
+                <span className="badge">摘要</span>
+                <span>${submission.case_summary || "未填写"}</span>
+              </div>
+              <div className="info-list-item">
+                <span className="badge">患者</span>
+                <span>${submission.patient_age || "年龄未填"} · ${label(meta, "sex", submission.patient_sex)}</span>
+              </div>
+              <div className="info-list-item">
+                <span className="badge">附件</span>
+                <span>${submission.uploaded_images?.length ? submission.uploaded_images.join("，") : "无影像附件"}${submission.uploaded_docs?.length ? `；${submission.uploaded_docs.join("，")}` : ""}</span>
+              </div>
             </div>
           </div>
         </div>
 
         ${assets.length
           ? html`
-              <div className="info-panel" style=${{ marginTop: "18px" }}>
+              <div className="context-detail-block" style=${{ marginTop: "18px" }}>
                 <div className="panel-title">原始图像</div>
                 <div style=${{ display: "grid", gap: "14px", gridTemplateColumns: assets.length > 1 ? "repeat(2, minmax(0, 1fr))" : "1fr" }}>
                   ${assets.map(
@@ -2258,11 +2749,145 @@
     `;
   }
 
-  function PlannerTurnCard({ turn, meta }) {
+  function plannerReviewFromApproval(approval) {
+    const parsed = parseObjectJson(approval?.note);
+    if (!parsed || parsed.type !== "planner_step_review" || !Array.isArray(parsed.steps)) {
+      return null;
+    }
+    return parsed;
+  }
+
+  function PlannerReviewPanel({ session, turn, steps, onSubmitApproval, stale = false }) {
+    if (!session || !turn?.turn_id || !onSubmitApproval) {
+      return null;
+    }
+    const latestApproval = latestApprovalForTurn(session, turn.turn_id);
+    const savedReview = plannerReviewFromApproval(latestApproval);
+    const [reviewRows, setReviewRows] = useState(() =>
+      steps.map((step, index) => {
+        const id = numericStepId(step?.id, index + 1);
+        const saved = savedReview?.steps?.find((item) => numericStepId(item?.id) === id);
+        return {
+          id,
+          title: step?.title_zh || `步骤 ${index + 1}`,
+          status: saved?.status === "steer" ? "steer" : "approve",
+          note: saved?.note || "",
+        };
+      })
+    );
+    const [comment, setComment] = useState(savedReview?.comment || "");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    function updateRow(id, patch) {
+      setReviewRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    }
+
+    async function submitReview() {
+      const payload = {
+        type: "planner_step_review",
+        version: 1,
+        steps: reviewRows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          note: row.note,
+        })),
+        comment,
+      };
+      const action = reviewRows.every((row) => row.status === "approve") ? "approved" : "revision_requested";
+      setIsSubmitting(true);
+      try {
+        await onSubmitApproval(session.session_id, turn.turn_id, action, JSON.stringify(payload));
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
+
+    return html`
+      <div className="planner-review-panel">
+        <div className="planner-review-head">
+          <div>
+            <div className="panel-title">Planner Review</div>
+            <div className="planner-review-copy">
+              ${stale ? "该计划属于旧版 workflow revision，现仅保留为历史记录，不再接受复核。" : "逐步确认计划是否可执行；需要修改的步骤会作为 steer 意见保存。"}
+            </div>
+          </div>
+          ${latestApproval
+            ? html`<span className=${cx("review-badge", latestApproval.action === "approved" ? "is-approved" : "is-revision")}>
+                ${latestApproval.action === "approved" ? "计划已通过" : "计划需修改"}
+              </span>`
+            : null}
+        </div>
+        ${stale ? html`<div className="context-alert">当前病例已生成新的 Planner 计划。旧计划不会再驱动 Executor / Decider / Report。</div>` : null}
+        <div className="planner-review-list">
+          ${reviewRows.map((row) => html`
+            <div key=${row.id} className="planner-review-row">
+              <div className="planner-review-row-main">
+                <span className="badge">${row.id}</span>
+                <strong>${row.title}</strong>
+              </div>
+              ${stale
+                ? html`<span className="badge">历史计划</span>`
+                : html`
+                    <div className="planner-review-actions">
+                      <button
+                        type="button"
+                        className=${cx("review-action-button", row.status === "approve" && "is-primary")}
+                        disabled=${isSubmitting}
+                        onClick=${() => updateRow(row.id, { status: "approve" })}
+                      >
+                        通过
+                      </button>
+                      <button
+                        type="button"
+                        className=${cx("review-action-button", row.status === "steer" && "is-warning")}
+                        disabled=${isSubmitting}
+                        onClick=${() => updateRow(row.id, { status: "steer" })}
+                      >
+                        修改
+                      </button>
+                    </div>
+                  `}
+              ${row.status === "steer"
+                ? html`
+                    <textarea
+                      className="review-note-input planner-step-note"
+                      rows="2"
+                      value=${row.note}
+                      placeholder="写清楚这一步需要改什么，例如目标、顺序、证据类型或核查要求。"
+                      disabled=${stale}
+                      onInput=${(event) => updateRow(row.id, { note: event.target.value })}
+                    ></textarea>
+                  `
+                : null}
+            </div>
+          `)}
+        </div>
+        ${stale
+          ? null
+          : html`
+              <textarea
+                className="review-note-input"
+                rows="3"
+                value=${comment}
+                placeholder="整体意见，可留空"
+                onInput=${(event) => setComment(event.target.value)}
+              ></textarea>
+              <div className="review-action-row">
+                <button type="button" className="review-action-button is-primary" disabled=${isSubmitting} onClick=${submitReview}>
+                  保存计划复核
+                </button>
+              </div>
+            `}
+      </div>
+    `;
+  }
+
+  function PlannerTurnCard({ turn, meta, session, onSubmitApproval, stale = false }) {
     const result = turn.result;
     const rows = result.plan_display_steps || [];
     return html`
-      <div className="result-card">
+      <div className=${cx("result-card", stale && "is-stale-turn")}>
         <div className="result-head">
           <div>
             <div className="result-title">${result.title}</div>
@@ -2272,6 +2897,7 @@
             <span className="badge">@Planner</span>
             <span className="badge">${label(meta, "department", result.department)}</span>
             <span className="badge">计划</span>
+            ${stale ? html`<span className="badge stale-badge">已失效</span>` : null}
           </div>
         </div>
         <div className="info-panel">
@@ -2292,6 +2918,7 @@
             )}
           </div>
         </div>
+        <${PlannerReviewPanel} session=${session} turn=${turn} steps=${rows} onSubmitApproval=${onSubmitApproval} stale=${stale} />
       </div>
     `;
   }
@@ -2340,6 +2967,61 @@
     `;
   }
 
+  function EvidenceLedger({ session, contextSubmission, compact = false }) {
+    const executorTurn = latestExecutorTurn(session, { currentOnly: true });
+    if (!executorTurn) {
+      return null;
+    }
+    const result = executorTurn.result || {};
+    const records = Array.isArray(result.execution_records) ? result.execution_records : [];
+    if (!records.length) {
+      return null;
+    }
+    const planDisplaySteps = Array.isArray(result.plan_display_steps) ? result.plan_display_steps : [];
+    const primaryAsset = imageAssetsFromSubmission(executorTurn.submission)[0] || imageAssetsFromSubmission(contextSubmission)[0] || null;
+    return html`
+      <div className=${cx("result-card", "evidence-ledger-card", compact && "is-compact")}>
+        <div className="result-head">
+          <div>
+            <div className="result-title">证据台账</div>
+            ${compact ? null : html`<div className="result-summary">所有诊断判断和报告引用都必须回到这里的 Executor 证据。</div>`}
+          </div>
+          <div className="badge-row">
+            <span className="badge">${records.length} 条证据</span>
+            <span className="badge">可复核</span>
+          </div>
+        </div>
+        <div className="evidence-ledger-list">
+          ${records.map((record, index) => {
+            const stepId = numericStepId(record?.step_id, index + 1);
+            const display = resolveExecutionDisplay(record, planDisplaySteps, index);
+            const evidence = record.evidence || {};
+            const confidence = typeof evidence.confidence === "number" ? `${Math.round(evidence.confidence * 100)}%` : "";
+            return html`
+              <details key=${stepId} className="evidence-ledger-item">
+                <summary>
+                  <span className="badge">E${stepId}</span>
+                  <span>
+                    <strong>${display?.title_zh || `证据 ${stepId}`}</strong>
+                    <em>${display?.conclusion_zh || display?.evidence_summary_zh || "已完成证据采集。"}</em>
+                  </span>
+                  ${confidence ? html`<span className="badge">${confidence}</span>` : html`<span className="badge">证据</span>`}
+                </summary>
+                <${AutoEvidenceRecordDetail}
+                  evidenceId=${`E${stepId}`}
+                  record=${record}
+                  planDisplaySteps=${planDisplaySteps}
+                  asset=${primaryAsset}
+                  index=${index}
+                />
+              </details>
+            `;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
   function parseObjectJson(value) {
     if (!value) {
       return null;
@@ -2350,6 +3032,14 @@
     } catch (error) {
       return null;
     }
+  }
+
+  function decisionPayloadFromResult(result) {
+    return parseObjectJson(result?.raw_provider_payload) || {};
+  }
+
+  function deciderDisplayPayloadFromResult(result) {
+    return parseObjectJson(result?.display_payload) || {};
   }
 
   function reportPayloadFromResult(result) {
@@ -2438,7 +3128,160 @@
     `;
   }
 
-  function ReportTurnCard({ turn, meta }) {
+  function DeciderTurnCard({ turn, meta, contextSubmission }) {
+    const result = turn.result;
+    const decision = decisionPayloadFromResult(result);
+    const decisionDisplay = deciderDisplayPayloadFromResult(result);
+    const keyEvidence = Array.isArray(decision.key_evidence) ? decision.key_evidence : [];
+    const keyEvidenceDisplay = Array.isArray(decisionDisplay.key_evidence) ? decisionDisplay.key_evidence : [];
+    const displayByEvidenceId = Object.fromEntries(
+      keyEvidenceDisplay
+        .filter((item) => item && typeof item === "object" && String(item.evidence_id || "").trim())
+        .map((item) => [String(item.evidence_id || "").trim(), item])
+    );
+    const differentials = Array.isArray(decision.differential_diagnoses) ? decision.differential_diagnoses : [];
+    const differentialDisplay = Array.isArray(decisionDisplay.differential_diagnoses) ? decisionDisplay.differential_diagnoses : [];
+    const evidenceGaps = Array.isArray(decisionDisplay.evidence_gaps_zh)
+      ? decisionDisplay.evidence_gaps_zh.filter(Boolean)
+      : Array.isArray(decision.evidence_gaps) ? decision.evidence_gaps.filter(Boolean) : [];
+    const nextSteps = Array.isArray(decisionDisplay.recommended_next_steps_zh)
+      ? decisionDisplay.recommended_next_steps_zh.filter(Boolean)
+      : Array.isArray(decision.recommended_next_steps) ? decision.recommended_next_steps.filter(Boolean) : [];
+    const safetyFlags = Array.isArray(decisionDisplay.safety_flags_zh)
+      ? decisionDisplay.safety_flags_zh.filter(Boolean)
+      : Array.isArray(decision.safety_flags) ? decision.safety_flags.filter(Boolean) : [];
+    const reviewPoints = Array.isArray(decisionDisplay.human_review_points_zh)
+      ? decisionDisplay.human_review_points_zh.filter(Boolean)
+      : Array.isArray(decision.human_review_points) ? decision.human_review_points.filter(Boolean) : [];
+    const records = Array.isArray(result.execution_records) ? result.execution_records : [];
+    const planDisplaySteps = Array.isArray(result.plan_display_steps) ? result.plan_display_steps : [];
+    const primaryAsset = imageAssetsFromSubmission(turn.submission)[0] || imageAssetsFromSubmission(contextSubmission)[0] || null;
+    const confidence = Math.round(Number(decision.diagnosis_confidence ?? result.consensus_score ?? 0) * 100);
+    return html`
+      <div className="result-card decider-artifact-card">
+        <div className="result-head">
+          <div>
+            <div className="result-title">诊断判断</div>
+            <div className="result-summary">Decider 只负责基于 Executor 证据形成判断，不生成最终报告。</div>
+          </div>
+          <div className="badge-row">
+            <span className="badge">@Decider</span>
+            <span className="badge">${label(meta, "department", result.department)}</span>
+            <span className="badge">${decisionDisplay.decision_status_zh || decision.decision_status || "unknown"}</span>
+            <span className="badge">${confidence}% 置信度</span>
+          </div>
+        </div>
+
+        <section className="decider-primary">
+          <span>最可能判断</span>
+          <strong>${decisionDisplay.diagnostic_impression_zh || decision.diagnostic_impression || result.executive_summary}</strong>
+        </section>
+
+        <div className="decider-grid">
+          <section className="report-brief-section">
+            <div className="panel-title">关键证据</div>
+            <div className="report-evidence-list">
+              ${keyEvidence.map((item, index) => html`
+                <${AutoEvidenceDisclosure}
+                  key=${index}
+                  item=${{
+                    statement: displayByEvidenceId[String(item.evidence_id || "").trim()]?.supports_zh
+                      || displayByEvidenceId[String(item.evidence_id || "").trim()]?.quote_zh
+                      || item.supports
+                      || item.quote
+                      || "该证据被 Decider 纳入判断。",
+                    evidence_ids: item.evidence_id ? [item.evidence_id] : [],
+                  }}
+                  records=${records}
+                  planDisplaySteps=${planDisplaySteps}
+                  asset=${primaryAsset}
+                  index=${index}
+                />
+              `)}
+              ${!keyEvidence.length ? html`<div className="report-muted">暂无关键证据条目。</div>` : null}
+            </div>
+          </section>
+
+          <section className="report-brief-section">
+            <div className="panel-title">鉴别诊断</div>
+            <div className="report-evidence-list">
+              ${differentials.slice(0, 4).map((item, index) => {
+                const ids = [...(item.supporting_evidence_ids || []), ...(item.refuting_evidence_ids || [])];
+                const displayItem = differentialDisplay[index] || {};
+                return html`
+                  <div key=${index} className="report-evidence-item">
+                    <span className="badge">${evidenceIdLabel(ids)}</span>
+                    <span>
+                      <strong>${displayItem.name_zh || item.name || "未命名鉴别诊断"} · ${displayItem.likelihood_zh || item.likelihood || "unknown"}</strong>
+                      ${(displayItem.comment_zh || item.comment) ? html`<em>${displayItem.comment_zh || item.comment}</em>` : null}
+                    </span>
+                  </div>
+                `;
+              })}
+              ${!differentials.length ? html`<div className="report-muted">暂无鉴别诊断条目。</div>` : null}
+            </div>
+          </section>
+        </div>
+
+        <div className="decider-grid">
+          <section className="report-brief-section">
+            <div className="panel-title">缺失信息</div>
+            <div className="info-list">
+              ${evidenceGaps.slice(0, 5).map((item, index) => html`
+                <div key=${index} className="info-list-item"><span className="badge">${index + 1}</span><span>${item}</span></div>
+              `)}
+              ${!evidenceGaps.length ? html`<div className="report-muted">Decider 未列出关键缺失信息。</div>` : null}
+            </div>
+          </section>
+          <section className="report-brief-section">
+            <div className="panel-title">医生复核点</div>
+            <div className="info-list">
+              ${reviewPoints.slice(0, 5).map((item, index) => html`
+                <div key=${index} className="info-list-item"><span className="badge">${index + 1}</span><span>${item}</span></div>
+              `)}
+              ${!reviewPoints.length ? html`<div className="report-muted">请复核关键证据、诊断判断和鉴别诊断。</div>` : null}
+            </div>
+          </section>
+        </div>
+
+        ${nextSteps.length || safetyFlags.length
+          ? html`
+              <details className="result-raw-details report-detail-details">
+                <summary>展开下一步建议与安全提醒</summary>
+                <div className="result-raw-body">
+                  ${nextSteps.length
+                    ? html`
+                        <div className="report-detail-panel">
+                          <div className="panel-title">下一步检查</div>
+                          <div className="info-list">
+                            ${nextSteps.map((item, index) => html`
+                              <div key=${index} className="info-list-item"><span className="badge">${index + 1}</span><span>${item}</span></div>
+                            `)}
+                          </div>
+                        </div>
+                      `
+                    : null}
+                  ${safetyFlags.length
+                    ? html`
+                        <div className="report-detail-panel">
+                          <div className="panel-title">安全提醒</div>
+                          <div className="info-list">
+                            ${safetyFlags.map((item, index) => html`
+                              <div key=${index} className="info-list-item"><span className="badge">${index + 1}</span><span>${item}</span></div>
+                            `)}
+                          </div>
+                        </div>
+                      `
+                    : null}
+                </div>
+              </details>
+            `
+          : null}
+      </div>
+    `;
+  }
+
+  function ReportTurnCard({ turn, meta, contextSubmission }) {
     const result = turn.result;
     const report = reportPayloadFromResult(result);
     const findings = Array.isArray(report.evidence_based_findings) ? report.evidence_based_findings : [];
@@ -2446,19 +3289,22 @@
     const differentials = Array.isArray(report.differential_diagnosis) ? report.differential_diagnosis : [];
     const limitations = Array.isArray(report.limitations) ? report.limitations.filter(Boolean) : [];
     const reviewChecklist = Array.isArray(report.doctor_review_checklist) ? report.doctor_review_checklist.filter(Boolean) : result.next_steps || [];
+    const records = Array.isArray(result.execution_records) ? result.execution_records : [];
+    const planDisplaySteps = Array.isArray(result.plan_display_steps) ? result.plan_display_steps : [];
+    const primaryAsset = imageAssetsFromSubmission(turn.submission)[0] || imageAssetsFromSubmission(contextSubmission)[0] || null;
     const rawModelText = result.raw_model_text || "";
     const rawProviderRequest = result.raw_provider_request || "";
     const rawProviderPayload = result.raw_provider_payload || "";
     const confidence = Math.round(Number(result.consensus_score || 0) * 100);
     return html`
-      <div className="result-card report-brief-card">
+      <div className="result-card report-brief-card report-artifact-card">
         <div className="result-head">
           <div>
             <div className="result-title">${report.report_title || result.title}</div>
             <div className="result-summary">${report.clinical_summary || result.executive_summary}</div>
           </div>
           <div className="badge-row">
-            <span className="badge">@Report</span>
+            <span className="badge">Report Artifact</span>
             <span className="badge">${label(meta, "department", result.department)}</span>
             <span className="badge">${confidence}% 置信度</span>
           </div>
@@ -2474,10 +3320,14 @@
             <div className="panel-title">关键证据</div>
             <div className="report-evidence-list">
               ${findings.slice(0, 5).map((item, index) => html`
-                <div key=${index} className="report-evidence-item">
-                  <span className="badge">${evidenceIdLabel(item.evidence_ids)}</span>
-                  <span>${item.statement}</span>
-                </div>
+                <${AutoEvidenceDisclosure}
+                  key=${index}
+                  item=${item}
+                  records=${records}
+                  planDisplaySteps=${planDisplaySteps}
+                  asset=${primaryAsset}
+                  index=${index}
+                />
               `)}
               ${!findings.length ? html`<div className="report-muted">暂无结构化证据条目。</div>` : null}
             </div>
@@ -2725,6 +3575,7 @@
     const result = turn.result;
     const submission = turn.submission;
     const autoTurn = isAutoTurn(turn);
+    const stale = isTurnStale(session, turn);
     return html`
       <div>
         ${autoTurn
@@ -2735,6 +3586,7 @@
                   <span>当前输入</span>
                   <span>·</span>
                   <span>${formatTimestamp(turn.timestamp)}</span>
+                  ${stale ? html`<span className="message-meta-stale">旧版 workflow</span>` : null}
                 </div>
                 <div className="message-body">${turn.user_input || submission.case_summary}</div>
               </div>
@@ -2745,15 +3597,20 @@
           providerName=${result.serving_provider}
           modelName=${result.serving_model}
         />
+        ${stale
+          ? html`<div className="context-alert stale-turn-alert">该结果基于旧版 Planner 计划，已降级为历史记录，不会再作为当前 Executor / Decider / Report 的输入。</div>`
+          : null}
 
         ${result.execution_mode === "planner"
-          ? html`<${PlannerTurnCard} turn=${turn} meta=${meta} />`
+          ? html`<${PlannerTurnCard} turn=${turn} meta=${meta} session=${session} onSubmitApproval=${onSubmitApproval} stale=${stale} />`
           : result.execution_mode === "executor"
             ? html`<${ExecutorTurnCard} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`
-            : result.execution_mode === "report"
-              ? html`<${ReportTurnCard} turn=${turn} meta=${meta} />`
-              : html`<${GeneralTurnCard} turn=${turn} meta=${meta} />`}
-        ${session && turn?.turn_id && onSubmitApproval
+            : result.execution_mode === "decider"
+              ? html`<${DeciderTurnCard} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`
+              : result.execution_mode === "report"
+                ? html`<${ReportTurnCard} turn=${turn} meta=${meta} contextSubmission=${contextSubmission} />`
+                : html`<${GeneralTurnCard} turn=${turn} meta=${meta} />`}
+        ${session && turn?.turn_id && onSubmitApproval && result.execution_mode !== "planner" && !stale
           ? html`<${DoctorApprovalPanel} session=${session} turn=${turn} onSubmit=${onSubmitApproval} />`
           : null}
       </div>
@@ -2782,7 +3639,6 @@
     }
     return html`
       <div className="workspace-feed">
-        <${ContextPanel} submission=${contextSubmission} meta=${meta} compact=${false} />
         ${turns.map((turn, index) => html`
           <${TurnWorkspace}
             key=${turn.turn_id || `${turn.timestamp}-${index}`}
@@ -2843,12 +3699,13 @@
 
   function DiagnosticsDrawer({ open, session, meta, onClose }) {
     const result = session?.result;
+    const contextSubmission = session?.context_submission || session?.submission || null;
     return html`
       <aside className=${cx("drawer", open && "is-open")}>
         <div className="drawer-head">
           <div>
-            <div className="drawer-title">多智能体诊断</div>
-            <div className="topbar-copy">查看收敛轮次、角色轨迹与一致性结果。</div>
+            <div className="drawer-title">诊断面板</div>
+            <div className="topbar-copy">病例状态、证据台账和复核队列。</div>
           </div>
           <button className="icon-button" onClick=${onClose} aria-label="Close diagnostics">
             <${Icon} name="close" size=${18} />
@@ -2860,38 +3717,41 @@
                 <div className="drawer-card" style=${{ padding: "18px" }}>
                   <div className="panel-title">暂无结果</div>
                   <p style=${{ margin: 0, color: "var(--text-subtle)", lineHeight: 1.7 }}>
-                    提交病例后，这里会显示多智能体轮次、角色分工和一致性分数。
+                    提交病例后，这里会显示病例上下文、执行阶段、证据台账和医生复核状态。
                   </p>
                 </div>
               `
             : html`
-                <div className="drawer-card" style=${{ padding: "18px" }}>
-                  <div className="badge-row">
-                    <span className="badge">${label(meta, "department", result.department)}</span>
-                    <span className="badge">${label(meta, "output", result.output_style)}</span>
-                    <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
+                <${CaseRuntimePanel} session=${session} meta=${meta} contextSubmission=${contextSubmission} />
+
+                <details className="result-raw-details report-detail-details">
+                  <summary>模型轨迹</summary>
+                  <div className="drawer-card" style=${{ padding: "18px" }}>
+                    <div className="badge-row">
+                      <span className="badge">${label(meta, "department", result.department)}</span>
+                      <span className="badge">${label(meta, "output", result.output_style)}</span>
+                      <span className="badge">${Math.round(result.consensus_score * 100)}% 一致性</span>
+                    </div>
                   </div>
-                </div>
-
-                ${result.rounds.map(
-                  (round) => html`
-                    <div key=${round.round} className="drawer-card" style=${{ padding: "18px" }}>
-                      <div className="panel-title">Round ${round.round}</div>
-                      <div className="result-title" style=${{ fontSize: "1rem" }}>${Math.round(round.alignment * 100)}% Alignment</div>
-                      <p style=${{ color: "var(--text-subtle)", lineHeight: 1.7, marginBottom: 0 }}>${round.summary}</p>
-                    </div>
-                  `
-                )}
-
-                ${result.agent_trace.map(
-                  (trace, index) => html`
-                    <div key=${index} className="drawer-card" style=${{ padding: "18px" }}>
-                      <div className="panel-title">${label(meta, "role", trace.role)}</div>
-                      <div className="sidebar-footer-name">${trace.provider}</div>
-                      <p style=${{ color: "var(--text-subtle)", lineHeight: 1.7, marginBottom: 0 }}>${trace.note}</p>
-                    </div>
-                  `
-                )}
+                  ${result.rounds.map(
+                    (round) => html`
+                      <div key=${round.round} className="drawer-card" style=${{ padding: "18px" }}>
+                        <div className="panel-title">Round ${round.round}</div>
+                        <div className="result-title" style=${{ fontSize: "1rem" }}>${Math.round(round.alignment * 100)}% Alignment</div>
+                        <p style=${{ color: "var(--text-subtle)", lineHeight: 1.7, marginBottom: 0 }}>${round.summary}</p>
+                      </div>
+                    `
+                  )}
+                  ${result.agent_trace.map(
+                    (trace, index) => html`
+                      <div key=${index} className="drawer-card" style=${{ padding: "18px" }}>
+                        <div className="panel-title">${label(meta, "role", trace.role)}</div>
+                        <div className="sidebar-footer-name">${trace.provider}</div>
+                        <p style=${{ color: "var(--text-subtle)", lineHeight: 1.7, marginBottom: 0 }}>${trace.note}</p>
+                      </div>
+                    `
+                  )}
+                </details>
               `}
         </div>
       </aside>
@@ -4393,6 +5253,7 @@
         setSettings(data.settings);
         setMeta(data.meta);
         applySessionList(data.sessions || []);
+        setCurrentSession(data.active_session || null);
         setProfileDraft(cloneData(data.profile));
         setSettingsDraft(cloneData(data.settings));
         setComposer(makeDefaultComposer(data.meta, data.settings));
@@ -4685,6 +5546,10 @@
     async function openSession(sessionId) {
       try {
         const data = await fetchJson(`/api/sessions/${sessionId}`);
+        await fetchJson("/api/workspace/active", {
+          method: "POST",
+          body: JSON.stringify({ session_id: sessionId }),
+        });
         setCurrentSession(data.session);
         setPendingSubmission(null);
         setActiveView("workspace");
@@ -4695,6 +5560,20 @@
           pushNotice(error.message, "error");
         }
       }
+    }
+
+    async function clearActiveWorkspace() {
+      await fetchJson("/api/workspace/active", {
+        method: "POST",
+        body: JSON.stringify({ session_id: "" }),
+      });
+      setCurrentSession(null);
+      setPendingSubmission(null);
+      setHistoryPreviewSession(null);
+      setIsHistoryPreviewLoading(false);
+      setSettingsMenuOpen(false);
+      setDiagnosticsOpen(false);
+      setActiveView("workspace");
     }
 
     async function submitApproval(sessionId, turnId, action, note) {
@@ -4813,32 +5692,41 @@
       );
     }
 
-    function startNewChat() {
+    async function startNewChat() {
       const hasDraft = hasComposerDraft();
       const hasContext = Boolean(currentSession || pendingSubmission);
       const shouldReturnToWorkspace = activeView !== "workspace";
       if (!hasDraft && !hasContext && !shouldReturnToWorkspace) {
         return;
       }
-      closeHistoryPreview();
-      setCurrentSession(null);
-      setPendingSubmission(null);
-      setSettingsMenuOpen(false);
-      setDiagnosticsOpen(false);
-      setActiveView("workspace");
-      if (hasDraft || hasContext) {
-        resetComposer();
+      try {
+        await clearActiveWorkspace();
+        if (hasDraft || hasContext) {
+          resetComposer();
+        }
+        pushNotice("已开始新的病例工作区。");
+      } catch (error) {
+        if (!handleAuthError(error)) {
+          pushNotice(error.message, "error");
+        }
       }
     }
 
     async function submitCase() {
       const trimmedInput = composer.case_summary.trim();
       if (trimmedInput === "/clear") {
-        setCurrentSession(null);
-        setPendingSubmission(null);
-        resetComposer();
-        setActiveView("workspace");
-        pushNotice("已清空当前上下文。");
+        setIsSubmitting(true);
+        try {
+          await clearActiveWorkspace();
+          resetComposer();
+          pushNotice("已清空当前上下文。");
+        } catch (error) {
+          if (!handleAuthError(error)) {
+            pushNotice(error.message, "error");
+          }
+        } finally {
+          setIsSubmitting(false);
+        }
         return;
       }
 
@@ -4853,6 +5741,8 @@
         const executorRequested = isExecutorInvocation(composer.case_summary);
         const deciderRequested = isDeciderInvocation(composer.case_summary);
         const reportRequested = isReportInvocation(composer.case_summary);
+        const hasNewAttachments = Boolean(composer.image_files.length || composer.doc_files.length);
+        const startsNewCaseContext = (plannerRequested || autoRequested) && hasNewAttachments;
         const imageAssets = plannerRequested || executorRequested || autoRequested ? await serializeImageAssets(composer.image_files) : [];
         const anyAgentRequested = autoRequested || plannerRequested || executorRequested || deciderRequested || reportRequested;
         const execution = autoRequested
@@ -4882,10 +5772,13 @@
           uploaded_images: composer.image_files.map((file) => file.name),
           uploaded_docs: composer.doc_files.map((file) => file.name),
           uploaded_image_assets: imageAssets,
-          context_session_id: currentSession?.session_id || "",
+          context_session_id: startsNewCaseContext ? "" : currentSession?.session_id || "",
         };
         const pendingTimestamp = new Date().toLocaleString("zh-CN", { hour12: false });
         setActiveView("workspace");
+        if (startsNewCaseContext) {
+          setCurrentSession(null);
+        }
         if (autoRequested) {
           setPendingSubmission({
             timestamp: pendingTimestamp,

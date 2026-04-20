@@ -9,6 +9,7 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+from uuid import uuid4
 
 from rare_agents.display_composer import compose_plan_display_projection
 from rare_agents.grounding_harness import _build_grounding_views, prepare_harness_image
@@ -1002,6 +1003,7 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
         "output_path",
     ]
     known_ids: set[int] = set()
+    records_by_id: dict[int, dict[str, Any]] = {}
     for index, item in enumerate(raw_steps, start=1):
         if not isinstance(item, dict):
             raise ValueError(f"Planner step #{index} is not an object.")
@@ -1068,8 +1070,36 @@ def _validate_steps(raw_steps: Any) -> list[dict[str, Any]]:
             if len(nonzero_inputs) == 1:
                 record["relative_to_step"] = nonzero_inputs[0]
                 record["relationship"] = "same_target"
+        tool_type = str(record["tool_config"].get("tool_type") or "").strip()
+        evidence_mode = str(record["tool_config"].get("evidence_mode") or record.get("evidence_mode") or "").strip()
+        if tool_type == "evidence_vlm":
+            target_label = str(record["tool_config"].get("target_label") or record.get("target_label") or "").strip()
+            roi_definition = str(record["tool_config"].get("roi_definition") or record.get("roi_definition") or "").strip()
+            include = record["tool_config"].get("include") or record.get("include")
+            exclude = record["tool_config"].get("exclude") or record.get("exclude")
+            if _is_generic_target_label(target_label):
+                raise ValueError(f"Planner step #{index} evidence_vlm target_label is not concrete.")
+            if evidence_mode != "boundary_points":
+                raise ValueError(f"Planner step #{index} evidence_vlm must use evidence_mode boundary_points.")
+            if not roi_definition:
+                raise ValueError(f"Planner step #{index} evidence_vlm must define roi_definition.")
+            if not isinstance(include, list) or not include:
+                raise ValueError(f"Planner step #{index} evidence_vlm must define non-empty include regions.")
+            if not isinstance(exclude, list) or not exclude:
+                raise ValueError(f"Planner step #{index} evidence_vlm must define non-empty exclude regions.")
+        if tool_type == "vlm" and evidence_mode != "bbox":
+            raise ValueError(f"Planner step #{index} VLM evidence-check must use evidence_mode bbox.")
+        if tool_type == "coding":
+            parent_ids = [parent for parent in input_type if parent != 0]
+            for parent_id in parent_ids:
+                parent_record = records_by_id.get(parent_id)
+                parent_tool = str((parent_record or {}).get("tool_config", {}).get("tool_type") or "").strip()
+                parent_mode = str((parent_record or {}).get("tool_config", {}).get("evidence_mode") or (parent_record or {}).get("evidence_mode") or "").strip()
+                if parent_tool == "vlm" and parent_mode == "bbox":
+                    raise ValueError(f"Planner step #{index} coding cannot depend on bbox-only evidence step #{parent_id}.")
         cleaned.append(record)
         known_ids.add(step_id)
+        records_by_id[step_id] = record
     return cleaned
 
 
@@ -1201,6 +1231,7 @@ def run_planner_case(
     image_payloads: list[dict[str, Any]] | None = None,
     stream_callback: StreamCallback | None = None,
 ) -> EngineResult:
+    workflow_revision = uuid4().hex[:12]
     plan = compile_plan(
         submission=submission,
         profile=profile,
@@ -1257,5 +1288,6 @@ def run_planner_case(
         activated_agent=PLANNER_AGENT_NAME,
         plan_steps=steps,
         plan_display_steps=display_steps,
+        workflow_revision=workflow_revision,
         display_quality_warnings=list(plan.get("display_quality_warnings") or []),
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import hashlib
 from base64 import b64encode
 from copy import deepcopy
 from dataclasses import asdict
@@ -316,6 +317,7 @@ def _user_paths(username: str) -> dict[str, Path]:
         "settings": root / "settings.json",
         "history": root / "history.json",
         "sessions": root / "sessions.json",
+        "workspace": root / "workspace.json",
     }
 
 
@@ -329,6 +331,7 @@ def ensure_storage(username: str) -> None:
         "settings": asdict(default_settings()),
         "history": [],
         "sessions": [],
+        "workspace": {"active_session_id": ""},
     }
     legacy_paths = {
         "profile": LEGACY_PROFILE_PATH,
@@ -337,12 +340,13 @@ def ensure_storage(username: str) -> None:
         "sessions": LEGACY_SESSIONS_PATH,
     }
 
-    for key in ["profile", "settings", "history", "sessions"]:
+    for key in ["profile", "settings", "history", "sessions", "workspace"]:
         target = paths[key]
         if target.exists():
             continue
-        if username == "admin" and legacy_paths[key].exists():
-            payload = load_json(legacy_paths[key], defaults[key])
+        legacy_path = legacy_paths.get(key)
+        if username == "admin" and legacy_path is not None and legacy_path.exists():
+            payload = load_json(legacy_path, defaults[key])
         else:
             payload = defaults[key]
         save_json(target, payload)
@@ -437,6 +441,7 @@ def _load_feedback(data: dict[str, Any] | None) -> CaseFeedback | None:
         report_rating=int(data.get("report_rating", 0)),
         evidence_ratings=evidence_ratings,
         comment=str(data.get("comment", "")).strip(),
+        workflow_revision=str(data.get("workflow_revision", "")).strip(),
     )
 
 
@@ -451,6 +456,7 @@ def _safe_image_assets(items: list[dict[str, Any]] | None) -> list[dict[str, str
         media_type = str(item.get("media_type", "")).strip() or "image/jpeg"
         if not analysis_data_url.startswith("data:image/"):
             continue
+        image_hash = hashlib.sha256(analysis_data_url.encode("utf-8")).hexdigest()
         if not display_data_url.startswith("data:image/"):
             display_data_url = analysis_data_url
         cleaned.append(
@@ -459,6 +465,7 @@ def _safe_image_assets(items: list[dict[str, Any]] | None) -> list[dict[str, str
                 "media_type": media_type,
                 "data_url": analysis_data_url,
                 "display_data_url": display_data_url,
+                "sha256": image_hash,
             }
         )
         if len(cleaned) >= 2:
@@ -554,14 +561,6 @@ def _context_submission_from_session(session: CaseSessionRecord | None) -> CaseS
     return None
 
 
-def _normalize_context_text(value: object) -> str:
-    return " ".join(str(value or "").split()).strip().lower()
-
-
-def _normalize_name_set(values: list[str] | None) -> set[str]:
-    return {_normalize_context_text(value) for value in values or [] if _normalize_context_text(value)}
-
-
 def _session_has_bundle(session: CaseSessionRecord | None, bundle: str) -> bool:
     if session is None or not bundle:
         return session is not None
@@ -574,41 +573,6 @@ def _session_has_bundle(session: CaseSessionRecord | None, bundle: str) -> bool:
     return False
 
 
-def _session_context_score(session: CaseSessionRecord, reference: CaseSubmission | None) -> int:
-    if reference is None:
-        return 0
-    candidate = _context_submission_from_session(session)
-    if candidate is None:
-        return -1
-    score = 0
-    candidate_summary = _normalize_context_text(candidate.case_summary)
-    reference_summary = _normalize_context_text(reference.case_summary)
-    if candidate_summary and reference_summary:
-        if candidate_summary == reference_summary:
-            score += 12
-        elif candidate_summary in reference_summary or reference_summary in candidate_summary:
-            score += 6
-    candidate_cc = _normalize_context_text(candidate.chief_complaint)
-    reference_cc = _normalize_context_text(reference.chief_complaint)
-    if candidate_cc and reference_cc and candidate_cc == reference_cc:
-        score += 4
-    candidate_images = _normalize_name_set(candidate.uploaded_images)
-    reference_images = _normalize_name_set(reference.uploaded_images)
-    if candidate_images and reference_images:
-        score += 3 * len(candidate_images & reference_images)
-    candidate_docs = _normalize_name_set(candidate.uploaded_docs)
-    reference_docs = _normalize_name_set(reference.uploaded_docs)
-    if candidate_docs and reference_docs:
-        score += 2 * len(candidate_docs & reference_docs)
-    if _normalize_context_text(candidate.department) and _normalize_context_text(candidate.department) == _normalize_context_text(reference.department):
-        score += 1
-    if _normalize_context_text(candidate.output_style) and _normalize_context_text(candidate.output_style) == _normalize_context_text(reference.output_style):
-        score += 1
-    if _normalize_context_text(candidate.urgency) and _normalize_context_text(candidate.urgency) == _normalize_context_text(reference.urgency):
-        score += 1
-    return score
-
-
 def _resolve_context_session(
     sessions: list[CaseSessionRecord],
     *,
@@ -616,97 +580,141 @@ def _resolve_context_session(
     required_bundle: str = "",
     reference_submission: CaseSubmission | None = None,
 ) -> CaseSessionRecord | None:
+    del reference_submission
+    if not context_session_id:
+        return None
     exact = next((session for session in sessions if session.session_id == context_session_id), None) if context_session_id else None
     if exact is not None and _session_has_bundle(exact, required_bundle):
         return exact
-
-    target_submission = reference_submission or _context_submission_from_session(exact)
-    best_session: CaseSessionRecord | None = None
-    best_score = -1
-    for session in sessions:
-        if exact is not None and session.session_id == exact.session_id:
-            continue
-        if not _session_has_bundle(session, required_bundle):
-            continue
-        score = _session_context_score(session, target_submission)
-        if score > best_score:
-            best_score = score
-            best_session = session
-    if best_session is not None and best_score > 0:
-        return best_session
     if exact is not None:
         return exact
-    if required_bundle:
-        for session in sessions:
-            if _session_has_bundle(session, required_bundle):
-                return session
-    return sessions[0] if sessions else None
+    return None
+
+
+def _result_workflow_revision(result: EngineResult | None) -> str:
+    return str(getattr(result, "workflow_revision", "") or "").strip()
+
+
+def _session_turn_revision_map(session: CaseSessionRecord | None) -> dict[str, str]:
+    if session is None:
+        return {}
+    revision_map: dict[str, str] = {}
+    current_revision = ""
+    for index, turn in enumerate(session.turns or [], start=1):
+        mode = str(getattr(turn.result, "execution_mode", "") or "").strip()
+        explicit_revision = _result_workflow_revision(turn.result)
+        if mode == "planner":
+            current_revision = explicit_revision or str(turn.turn_id or f"planner-{index}").strip()
+            revision_map[str(turn.turn_id)] = current_revision
+            continue
+        if explicit_revision:
+            current_revision = explicit_revision
+        revision_map[str(turn.turn_id)] = explicit_revision or current_revision
+    return revision_map
+
+
+def _turn_workflow_revision(
+    session: CaseSessionRecord | None,
+    turn: SessionTurn | None,
+    *,
+    revision_map: dict[str, str] | None = None,
+) -> str:
+    if turn is None:
+        return ""
+    explicit_revision = _result_workflow_revision(turn.result)
+    if explicit_revision:
+        return explicit_revision
+    resolved_map = revision_map if revision_map is not None else _session_turn_revision_map(session)
+    return str(resolved_map.get(str(turn.turn_id), "")).strip()
+
+
+def _latest_turn_by_mode(
+    session: CaseSessionRecord | None,
+    mode: str,
+    *,
+    workflow_revision: str | None = None,
+) -> SessionTurn | None:
+    if session is None:
+        return None
+    turns = session.turns or []
+    revision_map = _session_turn_revision_map(session)
+    target_revision = str(workflow_revision or "").strip() if workflow_revision is not None else None
+    for turn in reversed(turns):
+        if turn.result.execution_mode != mode:
+            continue
+        if target_revision is not None and target_revision:
+            turn_revision = _turn_workflow_revision(session, turn, revision_map=revision_map)
+            if turn_revision != target_revision:
+                continue
+        return turn
+    return None
+
+
+def _latest_workflow_revision(session: CaseSessionRecord | None) -> str:
+    planner_turn = _latest_turn_by_mode(session, "planner")
+    if planner_turn is not None:
+        return _turn_workflow_revision(session, planner_turn)
+    revision_map = _session_turn_revision_map(session)
+    for turn in reversed((session.turns or []) if session is not None else []):
+        turn_revision = _turn_workflow_revision(session, turn, revision_map=revision_map)
+        if turn_revision:
+            return turn_revision
+    return ""
 
 
 def _latest_planner_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
-    if session is None:
+    turn = _latest_turn_by_mode(session, "planner")
+    if turn is None or not turn.result.plan_steps:
         return None
-    turns = session.turns or []
-    for turn in reversed(turns):
-        if turn.result.execution_mode != "planner":
-            continue
-        if not turn.result.plan_steps:
-            continue
-        trace = turn.result.agent_trace[0] if turn.result.agent_trace else {}
-        return {
-            "steps": turn.result.plan_steps,
-            "display_steps": turn.result.plan_display_steps,
-            "references": turn.result.references,
-            "provider": turn.result.serving_provider,
-            "model": turn.result.serving_model,
-            "note": str(trace.get("note") or "Loaded the existing planner-generated execution plan from context."),
-        }
-    return None
+    trace = turn.result.agent_trace[0] if turn.result.agent_trace else {}
+    return {
+        "steps": turn.result.plan_steps,
+        "display_steps": turn.result.plan_display_steps,
+        "references": turn.result.references,
+        "provider": turn.result.serving_provider,
+        "model": turn.result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing planner-generated execution plan from context."),
+        "workflow_revision": _turn_workflow_revision(session, turn),
+    }
 
 
 def _latest_executor_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
-    if session is None:
+    workflow_revision = _latest_workflow_revision(session)
+    turn = _latest_turn_by_mode(session, "executor", workflow_revision=workflow_revision or None)
+    if turn is None or not turn.result.execution_records:
         return None
-    turns = session.turns or []
-    for turn in reversed(turns):
-        if turn.result.execution_mode != "executor":
-            continue
-        if not turn.result.execution_records:
-            continue
-        trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
-        return {
-            "records": turn.result.execution_records,
-            "plan_steps": turn.result.plan_steps,
-            "plan_display_steps": turn.result.plan_display_steps,
-            "references": turn.result.references,
-            "provider": turn.result.serving_provider,
-            "model": turn.result.serving_model,
-            "note": str(trace.get("note") or "Loaded the existing executor evidence from context."),
-        }
-    return None
+    trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
+    return {
+        "records": turn.result.execution_records,
+        "plan_steps": turn.result.plan_steps,
+        "plan_display_steps": turn.result.plan_display_steps,
+        "references": turn.result.references,
+        "provider": turn.result.serving_provider,
+        "model": turn.result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing executor evidence from context."),
+        "workflow_revision": _turn_workflow_revision(session, turn),
+    }
 
 
 def _latest_decider_bundle(session: CaseSessionRecord | None) -> dict[str, Any] | None:
-    if session is None:
+    workflow_revision = _latest_workflow_revision(session)
+    turn = _latest_turn_by_mode(session, "decider", workflow_revision=workflow_revision or None)
+    if turn is None:
         return None
-    turns = session.turns or []
-    for turn in reversed(turns):
-        if turn.result.execution_mode != "decider":
-            continue
-        try:
-            decision = json.loads(turn.result.raw_provider_payload or "{}")
-        except json.JSONDecodeError:
-            decision = {}
-        if not decision:
-            continue
-        trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
-        return {
-            "decision": decision,
-            "provider": turn.result.serving_provider,
-            "model": turn.result.serving_model,
-            "note": str(trace.get("note") or "Loaded the existing decider decision from context."),
-        }
-    return None
+    try:
+        decision = json.loads(turn.result.raw_provider_payload or "{}")
+    except json.JSONDecodeError:
+        decision = {}
+    if not decision:
+        return None
+    trace = turn.result.agent_trace[-1] if turn.result.agent_trace else {}
+    return {
+        "decision": decision,
+        "provider": turn.result.serving_provider,
+        "model": turn.result.serving_model,
+        "note": str(trace.get("note") or "Loaded the existing decider decision from context."),
+        "workflow_revision": _turn_workflow_revision(session, turn),
+    }
 
 
 def load_sessions(username: str) -> list[CaseSessionRecord]:
@@ -771,6 +779,30 @@ def save_history(username: str, history: list[QueryHistoryItem]) -> None:
 
 def save_sessions(username: str, sessions: list[CaseSessionRecord]) -> None:
     save_json(_user_paths(username)["sessions"], [asdict(item) for item in sessions])
+
+
+def load_workspace_state(username: str) -> dict[str, str]:
+    ensure_storage(username)
+    data = load_json(_user_paths(username)["workspace"], {"active_session_id": ""})
+    return {"active_session_id": str(data.get("active_session_id", "")).strip()} if isinstance(data, dict) else {"active_session_id": ""}
+
+
+def save_workspace_state(username: str, *, active_session_id: str = "") -> dict[str, str]:
+    state = {"active_session_id": str(active_session_id or "").strip()}
+    save_json(_user_paths(username)["workspace"], state)
+    return state
+
+
+def set_active_workspace_session(username: str, session_id: str = "") -> dict[str, object]:
+    session_id = str(session_id or "").strip()
+    if session_id:
+        session = get_session(username, session_id)
+        if session is None:
+            raise ValueError("Session not found.")
+    else:
+        session = None
+    state = save_workspace_state(username, active_session_id=session_id)
+    return {"workspace": state, "active_session": serialize_session(session) if session is not None else None}
 
 
 def profile_from_payload(username: str, payload: dict[str, Any]) -> AppProfile:
@@ -1398,6 +1430,7 @@ def _persist_case_result(
     history = [history_item] + load_history(username)
     save_sessions(username, sessions)
     save_history(username, history)
+    save_workspace_state(username, active_session_id=session.session_id)
     return {
         "session": serialize_session(session),
         "result": asdict(result),
@@ -1545,6 +1578,7 @@ def _planner_bundle_from_result(result: EngineResult) -> dict[str, Any]:
         "provider": result.serving_provider,
         "model": result.serving_model,
         "note": str(trace.get("note") or "Loaded the existing planner-generated execution plan from context."),
+        "workflow_revision": _result_workflow_revision(result),
     }
 
 
@@ -1558,6 +1592,7 @@ def _executor_bundle_from_result(result: EngineResult) -> dict[str, Any]:
         "provider": result.serving_provider,
         "model": result.serving_model,
         "note": str(trace.get("note") or "Loaded the existing executor evidence from context."),
+        "workflow_revision": _result_workflow_revision(result),
     }
 
 
@@ -1572,6 +1607,7 @@ def _decider_bundle_from_result(result: EngineResult) -> dict[str, Any]:
         "provider": result.serving_provider,
         "model": result.serving_model,
         "note": str(trace.get("note") or "Loaded the existing decider decision from context."),
+        "workflow_revision": _result_workflow_revision(result),
     }
 
 
@@ -1966,13 +2002,14 @@ def submit_turn_approval(username: str, session_id: str, payload: dict[str, Any]
 
 def submit_case_feedback(username: str, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     sessions, session, _ = _find_session_and_turn(username, session_id=session_id)
+    workflow_revision = _latest_workflow_revision(session)
     executor_bundle = _latest_executor_bundle(session)
     if executor_bundle is None:
         raise ValueError("Case feedback requires completed Executor evidence.")
     if _latest_decider_bundle(session) is None:
         raise ValueError("Case feedback requires a completed Decider decision.")
-    report_turn_exists = any(turn.result.execution_mode == "report" for turn in session.turns)
-    if not report_turn_exists:
+    report_turn = _latest_turn_by_mode(session, "report", workflow_revision=workflow_revision or None)
+    if report_turn is None:
         raise ValueError("Case feedback requires a completed report.")
     diagnosis_rating = int(payload.get("diagnosis_rating", 0))
     report_rating = int(payload.get("report_rating", 0))
@@ -2004,6 +2041,7 @@ def submit_case_feedback(username: str, session_id: str, payload: dict[str, Any]
         report_rating=report_rating,
         evidence_ratings=[EvidenceFeedback(evidence_id=item, rating=ratings_by_id[item]) for item in evidence_ids],
         comment=str(payload.get("comment", "")).strip(),
+        workflow_revision=workflow_revision,
     )
     save_sessions(username, sessions)
     return {"session": serialize_session(session)}
@@ -2188,6 +2226,10 @@ def get_bootstrap_payload(current_user: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings(username)
     history = load_history(username)
     sessions = load_sessions(username)
+    workspace = load_workspace_state(username)
+    active_session = next((session for session in sessions if session.session_id == workspace.get("active_session_id")), None)
+    if workspace.get("active_session_id") and active_session is None:
+        workspace = save_workspace_state(username, active_session_id="")
     settings_menu = list(BASE_SETTINGS_MENU)
     if current_user.get("is_admin"):
         settings_menu.append(ADMIN_SETTINGS_MENU_ITEM)
@@ -2197,6 +2239,8 @@ def get_bootstrap_payload(current_user: dict[str, Any]) -> dict[str, Any]:
         "settings": asdict(settings),
         "history": [serialize_history_item(item, f"history-{index}") for index, item in enumerate(history, start=1)],
         "sessions": [serialize_session(session, include_details=False) for session in sessions],
+        "workspace": workspace,
+        "active_session": serialize_session(active_session) if active_session is not None else None,
         "admin_accounts": list_account_summaries() if current_user.get("is_admin") else [],
         "meta": {
             "departments": DEPARTMENTS,
