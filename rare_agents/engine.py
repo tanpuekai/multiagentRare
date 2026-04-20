@@ -256,8 +256,10 @@ def run_single_model_case(
         f"（{role_name}）直接生成临床草案，未执行多智能体收敛流程。"
     )
     raw_model_text = generated_answer.strip()
-    answer = raw_model_text or build_professional_answer(submission, profile)
-    answer_source = "provider" if raw_model_text else "fallback_template"
+    if not raw_model_text:
+        raise ValueError("Single-model provider returned empty content.")
+    answer = raw_model_text
+    answer_source = "provider"
     next_steps = [
         "当前结果来自单模型直出，建议仅用于接口连通性与草案风格测试。",
         "如需正式会诊结论，请关闭单模型测试并重新运行多智能体路径。",

@@ -11,6 +11,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from rare_agents.models import CaseSubmission
+from rare_agents.provider_client import StreamCallback, request_chat_completion_stream
 
 
 PLAN_DISPLAY_FIELDS = ("id", "title_zh", "goal_zh", "evidence_zh", "human_check_zh", "tag_zh")
@@ -27,11 +28,9 @@ PLACEHOLDER_PATTERNS = [
     r"\bcurrent\s+finding\b",
     r"\btarget\s+finding\b",
     r"\bdiagnostic\s+finding\b",
-    r"\bstep\s+\d+\b",
     r"当前征象",
     r"目标征象",
     r"当前诊断步骤",
-    r"步骤\s*\d+",
 ]
 
 PLAN_TAGS = {"定位", "量化", "证据", "解读"}
@@ -67,6 +66,31 @@ ALLOWED_LATIN_TERMS = [
     "mg",
     "mmHg",
 ]
+
+
+def _latin_terms_from_value(value: Any) -> list[str]:
+    terms: set[str] = set()
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for val in item.values():
+                walk(val)
+            return
+        if isinstance(item, list):
+            for val in item:
+                walk(val)
+            return
+        if not isinstance(item, str):
+            return
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9+-]*", item):
+            if any(token.lower() == allowed.lower() for allowed in ALLOWED_LATIN_TERMS):
+                continue
+            if len(token) <= 1:
+                continue
+            terms.add(token)
+
+    walk(value)
+    return sorted(terms, key=lambda item: (item.lower(), item))
 
 
 def _normalize_endpoint(endpoint: str) -> str:
@@ -114,16 +138,30 @@ def _parse_json_text(text: str) -> Any:
     return json.loads(raw)
 
 
-def _request_display_json(provider: Any, messages: list[dict[str, Any]], *, max_tokens: int) -> Any:
+def _request_display_json(
+    provider: Any,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int,
+    stream_callback: StreamCallback | None = None,
+) -> Any:
     url = f"{_normalize_endpoint(provider.endpoint).rstrip('/')}/chat/completions"
-    payload = json.dumps(
-        {
-            "model": provider.model_name,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0,
-        }
-    ).encode("utf-8")
+    body = {
+        "model": provider.model_name,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0,
+    }
+    if stream_callback is not None:
+        content = request_chat_completion_stream(
+            url=url,
+            api_key=provider.api_key,
+            body=body,
+            user_agent="RareMDT-DisplayComposer/0.1",
+            on_delta=stream_callback,
+        )
+        return _parse_json_text(content)
+    payload = json.dumps(body).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {provider.api_key}",
         "Accept": "application/json",
@@ -155,6 +193,7 @@ def _compose_validated_display(
     validator: Any,
     max_tokens: int,
     label: str,
+    stream_callback: StreamCallback | None = None,
 ) -> list[dict[str, Any]]:
     messages = [
         {
@@ -166,50 +205,27 @@ def _compose_validated_display(
             "content": user_prompt,
         },
     ]
-    last_error: ValueError | None = None
-    for attempt in range(3):
-        raw = _request_display_json(provider, messages, max_tokens=max_tokens)
-        try:
-            return validator(raw)
-        except ValueError as exc:
-            last_error = exc
-            if attempt == 2:
-                break
-            messages = [
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt,
-                },
-                {
-                    "role": "assistant",
-                    "content": json.dumps(raw, ensure_ascii=False, indent=2),
-                },
-                {
-                    "role": "user",
-                    "content": dedent(
-                        f"""
-                        The previous JSON failed strict validation:
-                        {exc}
-
-                        Return the complete corrected JSON array only.
-                        Keep the same ids, order, and schema.
-                        Rewrite every clinician-facing field in Simplified Chinese.
-                        Do not copy descriptive English nouns or adjectives from the backend evidence.
-                        Preserve only standard uppercase medical abbreviations when clinically necessary.
-                        """
-                    ).strip(),
-                },
-            ]
-    raise ValueError(f"{label} failed strict validation after 3 attempts: {last_error}") from last_error
+    raw = _request_display_json(provider, messages, max_tokens=max_tokens, stream_callback=stream_callback)
+    try:
+        return validator(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label} failed strict validation: {exc}") from exc
 
 
 def _has_placeholder(text: str) -> bool:
     lowered = text.lower()
-    return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in PLACEHOLDER_PATTERNS)
+    if any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in PLACEHOLDER_PATTERNS):
+        return True
+    normalized = re.sub(r"\s+", "", text)
+    generic_step_patterns = [
+        r"^step\d+$",
+        r"^步骤\d+$",
+        r"^核查步骤\d+$",
+        r"^执行步骤\d+$",
+        r"^当前步骤\d+$",
+        r"^诊断步骤\d+$",
+    ]
+    return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in generic_step_patterns)
 
 
 def _assert_zh_text(value: object, *, field: str) -> str:
@@ -233,6 +249,32 @@ def _assert_tag(value: object, *, field: str, allowed: set[str]) -> str:
     if tag not in allowed:
         raise ValueError(f"Display field {field} has unsupported tag: {tag}")
     return tag
+
+
+def _quality_warnings_for_zh_text(value: object, *, field: str) -> list[str]:
+    warnings: list[str] = []
+    text = " ".join(str(value or "").split()).strip()
+    if not text:
+        warnings.append(f"{field} is empty.")
+        return warnings
+    if _has_placeholder(text):
+        warnings.append(f"{field} may contain placeholder wording: {text}")
+    if not re.search(r"[\u4e00-\u9fff]", text):
+        warnings.append(f"{field} is not written in Chinese.")
+    latin_checked = text
+    for term in ALLOWED_LATIN_TERMS:
+        latin_checked = re.sub(re.escape(term), "", latin_checked, flags=re.IGNORECASE)
+    if re.search(r"[A-Za-z]", latin_checked):
+        warnings.append(f"{field} contains untranslated English: {text}")
+    return warnings
+
+
+def _text_or_empty(value: object) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _tag_or_raw(value: object) -> str:
+    return _text_or_empty(value)
 
 
 def _compact_text(value: object, *, limit: int = 360) -> str:
@@ -356,6 +398,15 @@ def _plan_display_prompt(
     visual_profile: dict[str, Any] | None,
     rag_text: str,
 ) -> str:
+    compact_plan = [_compact_plan_step(step) for step in plan_steps]
+    blocked_latin_terms = _latin_terms_from_value(
+        {
+            "source_case": _submission_context(submission),
+            "visual_profile": visual_profile or {},
+            "plan": compact_plan,
+            "rag_text": rag_text,
+        }
+    )
     return dedent(
         f"""
         You are the display composer for a clinical multi-agent system.
@@ -373,6 +424,9 @@ def _plan_display_prompt(
 
         English executable plan:
         {json.dumps(plan_steps, ensure_ascii=False, indent=2)}
+
+        Backend Latin tokens that must NOT appear literally in any Chinese display field:
+        {json.dumps(blocked_latin_terms[:120], ensure_ascii=False)}
 
         Return ONLY a strict JSON array. One display object per executable step.
         Required schema:
@@ -394,6 +448,8 @@ def _plan_display_prompt(
         - Do not use placeholders such as 当前征象, 目标征象, 步骤4, current finding, target finding.
         - Use concise Simplified Chinese. Translate all descriptive English words into Chinese.
         - Do not copy English nouns or adjectives from the backend plan into Chinese fields.
+        - Before returning JSON, silently verify every value ending with _zh contains no Latin letters after removing allowed uppercase medical abbreviations.
+        - Translate backend terms by meaning instead of copying them. Examples: mask -> 掩膜, bbox -> 包围框, boundary -> 边界, target -> 目标区域, rim tissue -> 边缘组织 or 神经视网膜缘组织 when the anatomy is optic nerve.
         - Standard uppercase medical abbreviations are allowed only when clinically necessary.
         """
     ).strip()
@@ -406,6 +462,7 @@ def compose_plan_display(
     plan_steps: list[dict[str, Any]],
     visual_profile: dict[str, Any] | None,
     rag_text: str,
+    stream_callback: StreamCallback | None = None,
 ) -> list[dict[str, Any]]:
     prompt = _plan_display_prompt(
         submission=submission,
@@ -415,11 +472,16 @@ def compose_plan_display(
     )
     return _compose_validated_display(
         provider=provider,
-        system_prompt="You compose clinician-facing UI text from strict backend plans. Return only JSON.",
+        system_prompt=(
+            "You compose clinician-facing UI text from strict backend plans. Return only JSON. "
+            "JSON keys must match the schema, but every *_zh value must be natural Simplified Chinese. "
+            "Lowercase English or copied backend Latin words inside *_zh values are invalid."
+        ),
         user_prompt=prompt,
         validator=lambda raw: validate_plan_display(raw, plan_steps),
         max_tokens=2400,
         label="Plan display composition",
+        stream_callback=stream_callback,
     )
 
 
@@ -454,6 +516,69 @@ def validate_plan_display(raw: Any, plan_steps: list[dict[str, Any]]) -> list[di
     return cleaned
 
 
+def project_plan_display(raw: Any, plan_steps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(raw, list):
+        raise ValueError("Plan display composer output must be a JSON array.")
+    expected_ids = [int(step.get("id") or index) for index, step in enumerate(plan_steps, start=1)]
+    if len(raw) != len(expected_ids):
+        raise ValueError("Plan display composer output length does not match executable plan length.")
+    projected: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen_ids: list[int] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Plan display item #{index} must be an object.")
+        missing = [field for field in PLAN_DISPLAY_FIELDS if field not in item]
+        if missing:
+            raise ValueError(f"Plan display item #{index} is missing fields: {', '.join(missing)}")
+        step_id = int(item["id"])
+        seen_ids.append(step_id)
+        for field in ("title_zh", "goal_zh", "evidence_zh", "human_check_zh", "tag_zh"):
+            warnings.extend(_quality_warnings_for_zh_text(item.get(field), field=f"plan[{step_id}].{field}"))
+        display_item = {
+            "id": step_id,
+            "title_zh": _text_or_empty(item["title_zh"]),
+            "goal_zh": _text_or_empty(item["goal_zh"]),
+            "evidence_zh": _text_or_empty(item["evidence_zh"]),
+            "human_check_zh": _text_or_empty(item["human_check_zh"]),
+            "tag_zh": _tag_or_raw(item["tag_zh"]),
+        }
+        display_item["desc_zh"] = _combine_plan_desc(display_item)
+        projected.append(display_item)
+    if seen_ids != expected_ids:
+        raise ValueError(f"Plan display ids {seen_ids} do not match executable plan ids {expected_ids}.")
+    return projected, warnings
+
+
+def compose_plan_display_projection(
+    *,
+    provider: Any,
+    submission: CaseSubmission,
+    plan_steps: list[dict[str, Any]],
+    visual_profile: dict[str, Any] | None,
+    rag_text: str,
+    stream_callback: StreamCallback | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    prompt = _plan_display_prompt(
+        submission=submission,
+        plan_steps=plan_steps,
+        visual_profile=visual_profile,
+        rag_text=rag_text,
+    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You compose clinician-facing UI text from strict backend plans. Return only JSON. "
+                "JSON keys must match the schema, but every *_zh value must be natural Simplified Chinese."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    raw = _request_display_json(provider, messages, max_tokens=2400, stream_callback=stream_callback)
+    return project_plan_display(raw, plan_steps)
+
+
 def _execution_display_prompt(
     *,
     submission: CaseSubmission,
@@ -472,6 +597,13 @@ def _execution_display_prompt(
         }
         for record in records
     ]
+    blocked_latin_terms = _latin_terms_from_value(
+        {
+            "source_case": _submission_context(submission),
+            "plan": compact_plan_steps,
+            "records": compact_records,
+        }
+    )
     return dedent(
         f"""
         You are the evidence display composer for a clinical multi-agent system.
@@ -485,6 +617,9 @@ def _execution_display_prompt(
 
         Compact executor evidence records:
         {json.dumps(compact_records, ensure_ascii=False, indent=2)}
+
+        Backend Latin tokens that must NOT appear literally in any Chinese display field:
+        {json.dumps(blocked_latin_terms[:120], ensure_ascii=False)}
 
         Return ONLY a strict JSON array. One display object per executor record.
         Required schema:
@@ -509,6 +644,8 @@ def _execution_display_prompt(
         - Do not use placeholders such as 当前征象, 目标征象, 当前诊断步骤, current finding, target finding.
         - Use concise Simplified Chinese. Translate all descriptive English words into Chinese.
         - Do not copy English nouns or adjectives from backend evidence into Chinese fields.
+        - Before returning JSON, silently verify every value ending with _zh contains no Latin letters after removing allowed uppercase medical abbreviations.
+        - Translate backend terms by meaning instead of copying them. Examples: mask -> 掩膜, bbox -> 包围框, boundary -> 边界, target -> 目标区域, rim tissue -> 边缘组织 or 神经视网膜缘组织 when the anatomy is optic nerve.
         - Standard uppercase medical abbreviations are allowed only when clinically necessary.
         """
     ).strip()
@@ -520,15 +657,21 @@ def compose_execution_display(
     submission: CaseSubmission,
     plan_steps: list[dict[str, Any]],
     records: list[dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
 ) -> list[dict[str, Any]]:
     prompt = _execution_display_prompt(submission=submission, plan_steps=plan_steps, records=records)
     return _compose_validated_display(
         provider=provider,
-        system_prompt="You compose clinician-facing UI text from strict executor evidence records. Return only JSON.",
+        system_prompt=(
+            "You compose clinician-facing UI text from strict executor evidence records. Return only JSON. "
+            "JSON keys must match the schema, but every *_zh value must be natural Simplified Chinese. "
+            "Lowercase English or copied backend Latin words inside *_zh values are invalid."
+        ),
         user_prompt=prompt,
         validator=lambda raw: validate_execution_display(raw, records),
         max_tokens=2600,
         label="Executor display composition",
+        stream_callback=stream_callback,
     )
 
 
@@ -561,3 +704,60 @@ def validate_execution_display(raw: Any, records: list[dict[str, Any]]) -> list[
     if seen_ids != expected_ids:
         raise ValueError(f"Execution display ids {seen_ids} do not match executor record ids {expected_ids}.")
     return cleaned
+
+
+def project_execution_display(raw: Any, records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    if not isinstance(raw, list):
+        raise ValueError("Execution display composer output must be a JSON array.")
+    expected_ids = [int(record.get("step_id") or index) for index, record in enumerate(records, start=1)]
+    if len(raw) != len(expected_ids):
+        raise ValueError("Execution display composer output length does not match executor record length.")
+    projected: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen_ids: list[int] = []
+    for index, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"Execution display item #{index} must be an object.")
+        missing = [field for field in EXECUTION_DISPLAY_FIELDS if field not in item]
+        if missing:
+            raise ValueError(f"Execution display item #{index} is missing fields: {', '.join(missing)}")
+        step_id = int(item["step_id"])
+        seen_ids.append(step_id)
+        for field in ("title_zh", "conclusion_zh", "evidence_summary_zh", "human_check_zh", "tag_zh"):
+            warnings.extend(_quality_warnings_for_zh_text(item.get(field), field=f"execution[{step_id}].{field}"))
+        display_item = {
+            "step_id": step_id,
+            "title_zh": _text_or_empty(item["title_zh"]),
+            "conclusion_zh": _text_or_empty(item["conclusion_zh"]),
+            "evidence_summary_zh": _text_or_empty(item["evidence_summary_zh"]),
+            "human_check_zh": _text_or_empty(item["human_check_zh"]),
+            "tag_zh": _tag_or_raw(item["tag_zh"]),
+        }
+        display_item["desc_zh"] = _combine_execution_desc(display_item)
+        projected.append(display_item)
+    if seen_ids != expected_ids:
+        raise ValueError(f"Execution display ids {seen_ids} do not match executor record ids {expected_ids}.")
+    return projected, warnings
+
+
+def compose_execution_display_projection(
+    *,
+    provider: Any,
+    submission: CaseSubmission,
+    plan_steps: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    stream_callback: StreamCallback | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    prompt = _execution_display_prompt(submission=submission, plan_steps=plan_steps, records=records)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You compose clinician-facing UI text from strict executor evidence records. Return only JSON. "
+                "JSON keys must match the schema, but every *_zh value must be natural Simplified Chinese."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    raw = _request_display_json(provider, messages, max_tokens=2600, stream_callback=stream_callback)
+    return project_execution_display(raw, records)

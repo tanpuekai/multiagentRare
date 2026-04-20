@@ -131,6 +131,7 @@ class EngineResult:
     raw_model_text: str = ""
     raw_provider_request: str = ""
     raw_provider_payload: str = ""
+    display_quality_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -156,10 +157,36 @@ class QueryHistoryItem:
 
 @dataclass
 class SessionTurn:
+    turn_id: str
     timestamp: str
     user_input: str
     submission: CaseSubmission
     result: EngineResult
+
+
+@dataclass
+class DoctorApproval:
+    approval_id: str
+    turn_id: str
+    execution_mode: str
+    action: str
+    note: str = ""
+    created_at: str = ""
+
+
+@dataclass
+class EvidenceFeedback:
+    evidence_id: str
+    rating: int
+
+
+@dataclass
+class CaseFeedback:
+    submitted_at: str
+    diagnosis_rating: int
+    report_rating: int
+    evidence_ratings: list[EvidenceFeedback] = field(default_factory=list)
+    comment: str = ""
 
 
 @dataclass
@@ -176,6 +203,8 @@ class CaseSessionRecord:
     result: EngineResult | None = None
     context_submission: CaseSubmission | None = None
     turns: list[SessionTurn] = field(default_factory=list)
+    doctor_approvals: list[DoctorApproval] = field(default_factory=list)
+    case_feedback: CaseFeedback | None = None
 
     @classmethod
     def from_result(
@@ -185,9 +214,11 @@ class CaseSessionRecord:
         result: EngineResult,
         *,
         user_input: str | None = None,
+        turn_id: str = "",
     ) -> "CaseSessionRecord":
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         turn = SessionTurn(
+            turn_id=turn_id,
             timestamp=timestamp,
             user_input=(user_input or submission.case_summary).strip(),
             submission=submission,
